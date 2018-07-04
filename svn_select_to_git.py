@@ -3,6 +3,7 @@
 from __future__ import print_function
 import sys
 import os
+import os.path
 import subprocess
 import inspect
 import re
@@ -29,19 +30,24 @@ reRemoteBranch = re.compile("\s*origin/(\S+)")
 ###
 ##############################
 
+def perr(errmsg, retcode=1):
+    "Utility to print an error message and exit"
+    print(errmsg, file=sys.stderr)
+    exit(retcode)
+# End perr
+
 def quitOnFail(retcode, caller):
     "Utility to quit execution on a non-zero return code"
     if retcode != 0:
-        print("{} failed with return code {}".format(caller, retcode),
-              file=sys.stderr)
-        exit(retcode)
+        errmsg = "{} failed with return code {}".format(caller, retcode)
+        perr(errmsg, retcode)
     # End if
 # End quitOnFail
 
 def checkOutput(commands, verbose=False):
     "Try a command line and return the output on success (None on failure)"
     try:
-        outstr = subprocess.check_output(commands)
+        outstr = subprocess.check_output(commands, stderr=open("/dev/null", mode='w'))
     except OSError as e:
         print("Execution of '{}' failed:".format(' '.join(commands)),
               file=sys.stderr)
@@ -88,7 +94,7 @@ def scall(commands):
 # End of scall
 
 def retcall(commands):
-    "Try a command line and return the return value"
+    "Try a command line and return the return value. Suppress normal output"
     FNULL = open(os.devnull, 'w')
     try:
         retcode = subprocess.call(commands, stdout=FNULL, stderr=subprocess.STDOUT)
@@ -192,7 +198,7 @@ class LogEntry(object):
     def __init__(self, rev, who, when, url):
         self.revstr = rev
         self.committer = who
-        self.commitDate = when
+        self.commit_date = when
         self.URL = url
     # End def __init__
 
@@ -203,6 +209,14 @@ class LogEntry(object):
     def revNum(self):
         return int(self.revstr)
     # End def revNum
+
+    def who(self):
+        return self.committer
+    # End def who
+
+    def when(self):
+        return self.commit_date
+    # End def when
 
     def url(self):
         return self.URL
@@ -233,7 +247,7 @@ class SvnLogEntry(LogEntry):
         # Include some import information
         logm = logm + 'Imported from ' + self.url() + "@{}".format(self.revNum())
         logm = logm + os.linesep + 'Commited by ' + str(self.committer)
-        logm = logm + ' at ' + str(self.commitDate) + os.linesep
+        logm = logm + ' at ' + str(self.commit_date) + os.linesep
         logm = logm + 'Original svn commit message:' + os.linesep
         # Now, include full original log message
         for line in self.message:
@@ -312,7 +326,7 @@ def svnList(url):
             entries.append(line.rstrip("/"))
         # End for
     # End if
-    
+
     return entries
 # End def svnList
 
@@ -333,7 +347,7 @@ def svnLastChangedRev(url):
     return rev
 # End def svnLastChangedRev
 
-def svnCaptureLog(repoURL, revstr, tag=None):
+def svnCaptureLog(repoURL, revstr, auth_table, svn_auth, keep_dates, tag=None):
     logs = []
     caller = "svnCaptureLog {} {}".format(repoURL, revstr)
     log = checkOutput(["svn", "log", "--stop-on-copy", "-r{}".format(revstr), repoURL])
@@ -352,9 +366,22 @@ def svnCaptureLog(repoURL, revstr, tag=None):
                     lines = []
                 # End if
             elif (match is not None):
-                rev = match.group(1)
-                who = match.group(2)
-                when = match.group(3)
+                rev = match.group(1).strip()
+                who = match.group(2).strip()
+                if auth_table is not None:
+                    if who in auth_table:
+                        who = auth_table[who]
+                    else:
+                        print("WARNING: Author, '{}', not found in author table".format(who))
+                elif not svn_auth:
+                    who = None
+                # No else, just keep svn who
+                # End if
+                if keep_dates:
+                    when = match.group(3).split('(')[0].strip()
+                else:
+                    when = None
+                # End if
                 nlines = int(match.group(4))
                 skip = True # Skip the blank line after a match
             else:
@@ -365,6 +392,29 @@ def svnCaptureLog(repoURL, revstr, tag=None):
     # End if
     return logs
 # End def svnCaptureLog
+
+def parseAuthorTable(filename):
+    if not os.path.exists(filename):
+        perr("Author table, '{}', does not exist".format(filename))
+
+    auth_table = {}
+    try:
+        with open(filename) as f:
+            for line in f:
+                entry = line.split(':')
+                if len(entry) == 2:
+                    auth_table[entry[0].strip()] = entry[1].strip()
+                elif len(entry) != 1:
+                    raise ValueError("Bad author table entry, '{}'".format(line))
+                else:
+                    print("Ignoring incorrectly formatted author entry, '{}'".format(line.strip()))
+    except ValueError as e:
+        perr(e)
+    except Exception as e:
+        perr(e)
+
+    return auth_table
+# End parseAuthorTable
 
 ##############################
 ###
@@ -513,9 +563,7 @@ def gitCheckout(checkoutDir, ref=None):
     os.chdir(checkoutDir)
     retcode = 0
     if (gitCheckDir(checkoutDir) is None):
-        print("gitCheckout: Checkout dir ({}) not found".format(checkoutDir),
-              file=sys.stderr)
-        quitOnFail(1, caller)
+        perr("gitCheckout: Checkout dir ({}) not found".format(checkoutDir))
     # End if
 
     if ref is not None:
@@ -525,8 +573,7 @@ def gitCheckout(checkoutDir, ref=None):
             retcode = scall(["git", "checkout", "--track", "origin/"+ref])
         elif (refType == gitRef.localBranch):
             if ((branch != ref) and (not gitWdirClean(checkoutDir))):
-                quitOnFail(1, "Working directory ({}) not clean, aborting".format(checkoutDir))
-                exit(-1)
+                perr("Working directory ({}) not clean, aborting".format(checkoutDir))
             else:
                 retcode = scall(["git", "checkout", ref])
             # End if
@@ -543,7 +590,7 @@ def gitRmFile(repo, filename):
     caller = "gitRmFile {} {}".format(repo, filename)
     currdir = os.getcwd()
     os.chdir(repo)
-    retcode = scall(["git", "rm", filename])
+    retcode = retcall(["git", "rm", filename])
     os.chdir(currdir)
     quitOnFail(retcode, caller)
 # End def gitRmFile
@@ -552,16 +599,24 @@ def gitAddFile(repo, filename):
     caller = "gitAddFile {} {}".format(repo, filename)
     currdir = os.getcwd()
     os.chdir(repo)
-    retcode = scall(["git", "add", filename])
+    retcode = retcall(["git", "add", filename])
     os.chdir(currdir)
     quitOnFail(retcode, caller)
 # End def gitAddFile
 
-def gitCommitAll(repo, message):
+def gitCommitAll(repo, message, author=None, date=None):
     caller = "gitCommitAll {}".format(repo)
     currdir = os.getcwd()
     os.chdir(repo)
-    retcode = scall(["git", "commit", "-a", "--message={}".format(message)])
+    gitcmd = ["git", "commit", "-a"]
+    if author is not None:
+        gitcmd.append("--author='{}'".format(author))
+
+    if date is not None:
+        gitcmd.append("--date='{}'".format(date))
+
+    gitcmd.append("--message={}".format(message))
+    retcode = retcall(gitcmd)
     os.chdir(currdir)
     quitOnFail(retcode, caller)
 # End def gitRmFile
@@ -616,7 +671,7 @@ def gitCaptureLog(repo):
     return logs
 # End gitCaptureLog
 
-def gitSetupDir(chkdir, repo, branch):
+def gitSetupDir(chkdir, repo, branch, repoURL, auth_table, svn_author, preserve_dates):
     """
     Check to see if directory (chkdir) exists and is okay to use
     Create chkdir (if necessary) and set current branch to master
@@ -625,11 +680,9 @@ def gitSetupDir(chkdir, repo, branch):
     dirOK = True
     currdir = os.getcwd()
     if (branch != "master"):
-        if ((not os.path.exists(chkdir)) or 
+        if ((not os.path.exists(chkdir)) or
             (not os.path.exists(os.path.join(chkdir, ".git")))):
-            print("ERROR: git repo must exist to create branch {}".format(branch),
-                  file=sys.stderr)
-            quitOnFail(1, caller)
+            perr("ERROR: git repo must exist to create branch {}".format(branch))
         else:
             os.chdir(chkdir)
             dirOK = (retcall(["git", "checkout", branch]) == 0)
@@ -639,14 +692,12 @@ def gitSetupDir(chkdir, repo, branch):
                 if (dirOK):
                     # We have to figure out where to start this branch
                     gitLog = gitCaptureLog(repo)
-                    logs = svnCaptureLog(repoURL, rev.revString())
+                    logs = svnCaptureLog(repoURL, rev.revString(), auth_table, svn_author, preserve_dates)
                     branchRev = logs[len(logs) - 1].revision()
                     commit = findParentCommit(gitLog, tagRev)
                     dirOK = (retcall(["git", "branch", branch, commit]) == 0)
                 else:
-                    print("ERROR: master must exist to create branch {}".format(branch),
-                          file=sys.stderr)
-                    quitOnFail(1, caller)
+                    perr("ERROR: master must exist to create branch {}".format(branch))
                 # End if
             # End if
             os.chdir(currdir)
@@ -758,7 +809,7 @@ def processRevision(exportDir, gitDir, log):
   # End for
   # Commit everything
   if (gitNewRepo(gitDir) or (not gitWdirClean(gitDir))):
-    gitCommitAll(gitDir, log.formatLogMessage())
+    gitCommitAll(gitDir, log.formatLogMessage(), author=log.who(), date=log.when())
   # End if
   if (tag is not None):
     # Apply the tag
@@ -798,26 +849,63 @@ def parse_arguments():
     parser.add_argument('--branch', dest='branch_name', metavar='<branch_name>',
                         type=str, nargs=1, default='',
                         help="a git branch to checkout or create")
+    parser.add_argument('--author-table', dest='author_table',
+                        metavar='<author_translation_filename>',
+                        type=str, nargs=1, default='',
+                        help="""a filename for translating svn commit authors
+                        to author string for use in git commits.
+                        Each line has a svn author and a git author separated by a colon.
+                        The git author should be in the format 'A U Thor <author@domain>'""")
+    parser.add_argument('--ignore-svn-author', dest='git_author',
+                        action='store_true', default=False,
+                        help="""If False, use the original svn author string
+                        for each git commit. If True, the default git author
+                        string is used.
+                        Note that if the --author-table option is used, this
+                        argument is ignored and that table is used unless
+                        the svn author is not found in the table.
+                        Default is False
+                        """)
+    parser.add_argument('--use-current-date', dest='current_date',
+                        action='store_true', default=False,
+                        help="""If True, use current date and time for each git commit.
+                        If False, use the original svn commit date and time.
+                        Default is False""")
     parser.add_argument('--rev', dest='revisions', metavar="<revision>", type=str,
                         action='append',
                         help="revision, list of revisions or revision range")
 
     args = parser.parse_args()
-    return args.export_dir, args.git_dir, args.repo_url, args.subdir, args.tag_url, args.branch_name, args.revisions
+    return args
 # End def parse_arguemnts
 
 ###############################################################################
 def _main_func():
     revlist = []
 
-    export_dir, git_dir, repo_url, subdir, tag_url, branch_name, revisions = parse_arguments()
-    
+    args = parse_arguments()
+    export_dir = args.export_dir
+    git_dir = args.git_dir
+    repo_url = args.repo_url
+    subdir = args.subdir
+    tag_url = args.tag_url
+    branch_name = args.branch_name
+    author_table = args.author_table
+    svn_author = not args.git_author
+    preserve_dates = not args.current_date
+    revisions = args.revisions
+
     if (len(branch_name) == 0):
         branch_name = 'master'
     # End if
 
     export_dir = os.path.abspath(export_dir)
     git_dir = os.path.abspath(git_dir)
+
+    if len(author_table) > 0:
+        auth_table = parseAuthorTable(author_table[0])
+    else:
+        auth_table = None
 
     # Create a master list of revision ranges to process
     if (revisions is not None):
@@ -838,7 +926,7 @@ def _main_func():
     # End if
 
     # Make sure the git directory is ready to go
-    gitSetupDir(git_dir, repo_url, branch=branch_name)
+    gitSetupDir(git_dir, repo_url, branch_name, repo_url, auth_table, svn_author, preserve_dates)
     # Collect all the old svn revision numbers
     gitLog = gitCaptureLog(git_dir)
     gitRevs = [ x.revNum() for x in gitLog ]
@@ -847,7 +935,7 @@ def _main_func():
     svnLog = list()
     for rev in revlist:
         # Capture the log messages for range, 'rev'
-        logs = svnCaptureLog(repo_url, rev.revString())
+        logs = svnCaptureLog(repo_url, rev.revString(), auth_table, svn_author, preserve_dates)
         if (len(logs) > 0):
             print("Adding {} revisions from {}".format(len(logs), rev.revString()))
         else:
@@ -885,7 +973,7 @@ def _main_func():
                     tag_url = os.path.join(tag_url, subdir[0])
                 # End if
                 tagRev = svnLastChangedRev(tag_url)
-                logs = svnCaptureLog(tag_url, tagRev, tag=tag)
+                logs = svnCaptureLog(tag_url, tagRev, auth_table, svn_author, preserve_dates, tag=tag)
                 log = logs[0]
                 temp = log.revNum()
                 if temp < minRev:

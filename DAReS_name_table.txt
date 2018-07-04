@@ -1,0 +1,18 @@
+ (no author) : Nancy Collins <nancy@ucar.edu>
+ caya
+ chriss : Chris Snyder <chriss@ucar.edu>
+ hacker : Josh Hacker <hacker@ucar.edu>
+ hansenj
+ hendric : Jonathan Hendricks <hendric@ucar.edu>
+ hendric@ucar.edu : Jonathan Hendricks <hendric@ucar.edu>
+ hkershaw
+ hliu
+ jla : Jeffrey Anderson <jla@ucar.edu>
+ jla@ucar.edu : Jeffrey Anderson <jla@ucar.edu>
+ nancy : Nancy Collins <nancy@ucar.edu>
+ nancy@ucar.edu  : Nancy Collins <nancy@ucar.edu>
+ raeder : Kevin Raeder <raeder@ucar.edu>
+ raeder@ucar.edu : Kevin Raeder <raeder@ucar.edu>
+ thoar : Tim Hoar <thoar@ucar.edu>
+ thoar@ucar.edu : Tim Hoar <thoar@ucar.edu>
+ tmatsuo
