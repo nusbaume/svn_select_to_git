@@ -185,6 +185,14 @@ class SvnRevRange(object):
         # End if
         return revstr
     # end def revString
+
+    def revStart(self):
+        return self.start
+    # end def revStart
+
+    def revEnd(self):
+        return self.end
+    # end def revEnd
 # End class SvnRevRange
 
 class LogEntry(object):
@@ -671,7 +679,7 @@ def gitCaptureLog(repo):
     return logs
 # End gitCaptureLog
 
-def gitSetupDir(chkdir, repo, branch, repoURL, auth_table, svn_author, preserve_dates):
+def gitSetupDir(chkdir, repo, branch, rev, repoURL, auth_table, svn_author, preserve_dates):
     """
     Check to see if directory (chkdir) exists and is okay to use
     Create chkdir (if necessary) and set current branch to master
@@ -691,8 +699,18 @@ def gitSetupDir(chkdir, repo, branch, repoURL, auth_table, svn_author, preserve_
                 dirOK = (retcall(["git", "checkout", "master"]) == 0)
                 if (dirOK):
                     # We have to figure out where to start this branch
-                    gitLog = gitCaptureLog(repo)
-                    logs = svnCaptureLog(repoURL, rev.revString(), auth_table, svn_author, preserve_dates)
+                    gitLog = gitCaptureLog(chkdir)
+                    logs = list()
+                    revstart = rev.revStart()
+                    while len(logs) < 1:
+                        logs = svnCaptureLog(repoURL, revstart, auth_table, svn_author, preserve_dates)
+                        if len(logs) < 1:
+                            revstart = revstart + 1
+                            if revstart > rev.revEnd():
+                                perr("No commits in range {} to {}".format(rev.revStart(), rev.revEnd()))
+                            # End if
+                        # End if
+                    # End while
                     branchRev = logs[len(logs) - 1].revision()
                     commit = findParentCommit(gitLog, tagRev)
                     dirOK = (retcall(["git", "branch", branch, commit]) == 0)
@@ -702,14 +720,17 @@ def gitSetupDir(chkdir, repo, branch, repoURL, auth_table, svn_author, preserve_
             # End if
             os.chdir(currdir)
         # End if
-    # End if
+    # End if (branch != master)
     if (os.path.exists(chkdir)):
         if (os.path.exists(os.path.join(chkdir, ".git"))):
             os.chdir(chkdir)
             dirOK = (retcall(["git", "checkout", branch]) == 0)
-            if (not dirOK):
-                dirOK = (retcall(["git", "checkout", "-b", branch]) == 0)
-            # End if
+# XXgoldyXX: v debug only
+# Should not have to do this
+#            if (not dirOK):
+#                dirOK = (retcall(["git", "checkout", "-b", branch]) == 0)
+#            # End if
+# XXgoldyXX: ^ debug only
         else:
             dirOK = False
         # End if
@@ -844,11 +865,11 @@ def parse_arguments():
                         type=str, nargs=1, default='',
                         help="A subdirectory from which to draw files")
     parser.add_argument('--tags', dest='tag_url', metavar='<tag_url>',
-                        type=str, nargs=1, default='',
+                        type=str, nargs=1, action='append', default='',
                         help="the svn URL for tags related to <tag_url>")
     parser.add_argument('--branch', dest='branch_name', metavar='<branch_name>',
-                        type=str, nargs=1, default='',
-                        help="a git branch to checkout or create")
+                        type=str, nargs=1, action='store', default='',
+                        help="a git branch name to checkout or create")
     parser.add_argument('--author-table', dest='author_table',
                         metavar='<author_translation_filename>',
                         type=str, nargs=1, default='',
@@ -882,6 +903,7 @@ def parse_arguments():
 ###############################################################################
 def _main_func():
     revlist = []
+    revStart = None # revStart is the first revision in revlist
 
     args = parse_arguments()
     export_dir = args.export_dir
@@ -894,10 +916,6 @@ def _main_func():
     svn_author = not args.git_author
     preserve_dates = not args.current_date
     revisions = args.revisions
-
-    if (len(branch_name) == 0):
-        branch_name = 'master'
-    # End if
 
     export_dir = os.path.abspath(export_dir)
     git_dir = os.path.abspath(git_dir)
@@ -914,8 +932,18 @@ def _main_func():
             for rev in rlist:
                 newrev = SvnRevRange(rev)
                 revlist.append(newrev)
+                nstart = newrev
+                if (revStart is None) or (nstart < revStart.revStart()):
+                    revStart = nstart
+                # End if
             # End for
         # End for
+    # End if
+
+    if (len(branch_name) == 0):
+        branch_name = 'master'
+    else:
+        branch_name = branch_name[0]
     # End if
 
     # Set the correct URL for the repo
@@ -926,7 +954,7 @@ def _main_func():
     # End if
 
     # Make sure the git directory is ready to go
-    gitSetupDir(git_dir, repo_url, branch_name, repo_url, auth_table, svn_author, preserve_dates)
+    gitSetupDir(git_dir, repo_url, branch_name, revStart, repo_url, auth_table, svn_author, preserve_dates)
     # Collect all the old svn revision numbers
     gitLog = gitCaptureLog(git_dir)
     gitRevs = [ x.revNum() for x in gitLog ]
