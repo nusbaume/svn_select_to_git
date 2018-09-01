@@ -7,9 +7,9 @@ import os.path
 import subprocess
 import inspect
 import re
-import fnmatch
 import shutil
 import argparse
+import filecmp
 
 ## Important paths
 thisFile = os.path.realpath(inspect.getfile(inspect.currentframe()))
@@ -113,6 +113,21 @@ def retcall(commands):
     # End of try
     return retcode
 # End of retcall
+
+def file_diff(file1, file2):
+    """Return True if there is some difference between file1 and file2"""
+    diff = not os.path.exists(file2)
+    diff = diff or (not filecmp.cmp(file1, file2, shallow=False))
+    if not diff:
+        stat1 = os.stat(file1)
+        stat2 = os.stat(file2)
+        diff = stat1.st_mode != stat2.st_mode
+        diff = diff or (stat1.st_size != stat2.st_size)
+        diff = diff or (stat1.st_uid != stat2.st_uid)
+        diff = diff or (stat1.st_gid != stat2.st_gid)
+    # End if
+    return diff
+# End def file_diff
 
 ##############################
 ###
@@ -627,7 +642,7 @@ def gitCommitAll(repo, message, author=None, date=None):
     retcode = retcall(gitcmd)
     os.chdir(currdir)
     quitOnFail(retcode, caller)
-# End def gitRmFile
+# End def gitCommitAll
 
 def gitApplyTag(repo, tag, message):
     caller = "gitApplyTag {} {}".format(repo, tag)
@@ -783,16 +798,23 @@ def copySvn2Git(svnDir, gitDir):
   "Copy the files in svnDir to gitDir"
   currdir = os.getcwd()
   os.chdir(svnDir)
+  num_copies = 0
   for root, dirs, files in os.walk("."):
     parent = os.path.join(gitDir, root)
     if (not os.path.exists(parent)):
       os.makedirs(parent)
     # End if
     for file in files:
-      shutil.copy2(os.path.join(root, file), os.path.join(gitDir, root, file))
+        file1 = os.path.join(root, file)
+        file2 = os.path.join(gitDir, root, file)
+        if file_diff(file1, file2):
+            num_copies = num_copies + 1
+            shutil.copy2(file1, file2)
+        # End if
     # End for
   # End for
   os.chdir(currdir)
+  return num_copies
 # End def copySvn2Git
 
 def findParentCommit(gitLog, svnRev):
@@ -813,6 +835,7 @@ def findParentCommit(gitLog, svnRev):
 def processRevision(exportDir, gitDir, log):
   rnum = log.revision()
   tag = log.tag()
+  num_changes = 0
   print("Processing revision {}, tag = {}".format(int(rnum), tag))
   svnExport(exportDir, log.url(), rnum)
   orphans1 = FindTreeOrphans(exportDir, gitDir)
@@ -820,16 +843,18 @@ def processRevision(exportDir, gitDir, log):
   # Remove files no longer in repo
   for file in orphans2:
     gitRmFile(gitDir, file)
+    num_changes = num_changes + 1
   # End for
   # Copy the svn export directory into the working git directory
   # Can't use copytree since the repo directory already exists
-  copySvn2Git(exportDir, gitDir)
+  num_changes = num_changes + copySvn2Git(exportDir, gitDir)
   # Add files new to the repo
   for file in orphans1:
     gitAddFile(gitDir, file)
+    num_changes = num_changes + 1
   # End for
   # Commit everything
-  if (gitNewRepo(gitDir) or (not gitWdirClean(gitDir))):
+  if num_changes > 0:
     gitCommitAll(gitDir, log.formatLogMessage(), author=log.who(), date=log.when())
   # End if
   if (tag is not None):
