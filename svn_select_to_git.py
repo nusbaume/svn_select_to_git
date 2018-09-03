@@ -16,10 +16,11 @@ thisFile = os.path.realpath(inspect.getfile(inspect.currentframe()))
 currDir = os.path.dirname(thisFile)
 
 ## Regular expression for source files
+cby_str="Committed by"
 reRevis = re.compile(r"^r(\d+)\s+\|\s+([^|]+)\|\s+([^|]+)\|\s+(\d+)\s+lines?$")
 reCommit = re.compile(r"^commit ([0-9a-f]+)$")
 reImport = re.compile(r"^\s*Imported from .*@([\d]+)$")
-reAuthor = re.compile(r"^\s*Committed by (\S+)\s+at\s+(.+)$")
+reAuthor = re.compile(r"^\s*{} (.+)\s+at\s+([0-9][0-9\s:+-]+)$".format(cby_str))
 reLastChange = re.compile(r"^Last Changed Rev:\s+(\d+)$")
 reGitHash = re.compile("\A([a-fA-F0-9]+)\Z")
 reRemoteBranch = re.compile("\s*origin/(\S+)")
@@ -36,10 +37,13 @@ def perr(errmsg, retcode=1):
     exit(retcode)
 # End perr
 
-def quitOnFail(retcode, caller):
+def quitOnFail(retcode, caller, command=None):
     "Utility to quit execution on a non-zero return code"
     if retcode != 0:
         errmsg = "{} failed with return code {}".format(caller, retcode)
+        if command is not None:
+            errmsg = errmsg + os.linesep + " ".join(command)
+        # End if
         perr(errmsg, retcode)
     # End if
 # End quitOnFail
@@ -117,8 +121,8 @@ def retcall(commands):
 def file_diff(file1, file2):
     """Return True if there is some difference between file1 and file2"""
     diff = not os.path.exists(file2)
-    diff = diff or (not filecmp.cmp(file1, file2, shallow=False))
     if not diff:
+        # Check for permission or file size changes
         stat1 = os.stat(file1)
         stat2 = os.stat(file2)
         diff = stat1.st_mode != stat2.st_mode
@@ -126,6 +130,8 @@ def file_diff(file1, file2):
         diff = diff or (stat1.st_uid != stat2.st_uid)
         diff = diff or (stat1.st_gid != stat2.st_gid)
     # End if
+    # Make sure the file is really the same
+    diff = diff or (not filecmp.cmp(file1, file2, shallow=False))
     return diff
 # End def file_diff
 
@@ -269,7 +275,7 @@ class SvnLogEntry(LogEntry):
         logm = logm + os.linesep + os.linesep
         # Include some import information
         logm = logm + 'Imported from ' + self.url() + "@{}".format(self.revNum())
-        logm = logm + os.linesep + 'Commited by ' + str(self.committer)
+        logm = logm + os.linesep + cby_str + ' ' + str(self.committer)
         logm = logm + ' at ' + str(self.commit_date) + os.linesep
         logm = logm + 'Original svn commit message:' + os.linesep
         # Now, include full original log message
@@ -370,7 +376,7 @@ def svnLastChangedRev(url):
     return rev
 # End def svnLastChangedRev
 
-def svnCaptureLog(repoURL, revstr, auth_table, svn_auth, keep_dates, tag=None):
+def svnCaptureLog(repoURL, revstr, auth_table, svn_auth, keep_dates, tag=None, default_author=None):
     logs = []
     caller = "svnCaptureLog {} {}".format(repoURL, revstr)
     log = checkOutput(["svn", "log", "--stop-on-copy", "-r{}".format(revstr), repoURL])
@@ -394,6 +400,10 @@ def svnCaptureLog(repoURL, revstr, auth_table, svn_auth, keep_dates, tag=None):
                 if auth_table is not None:
                     if who in auth_table:
                         who = auth_table[who]
+                    elif default_author is not None:
+                        print("WARNING: Author, '{}', not found in author table, substituting '{}'".format(who,default_author))
+                        auth_table[who] = default_author
+                        who = default_author
                     else:
                         print("WARNING: Author, '{}', not found in author table".format(who))
                 elif not svn_auth:
@@ -622,9 +632,13 @@ def gitAddFile(repo, filename):
     caller = "gitAddFile {} {}".format(repo, filename)
     currdir = os.getcwd()
     os.chdir(repo)
-    retcode = retcall(["git", "add", filename])
-    os.chdir(currdir)
-    quitOnFail(retcode, caller)
+    # Since we may have declined to copy a new file (eg., bad symlink)
+    # Make sure the file exists before trying to add it
+    if os.path.exists(filename):
+        retcode = retcall(["git", "add", filename])
+        os.chdir(currdir)
+        quitOnFail(retcode, caller)
+    # End if
 # End def gitAddFile
 
 def gitCommitAll(repo, message, author=None, date=None):
@@ -641,7 +655,7 @@ def gitCommitAll(repo, message, author=None, date=None):
     gitcmd.append("--message={}".format(message))
     retcode = retcall(gitcmd)
     os.chdir(currdir)
-    quitOnFail(retcode, caller)
+    quitOnFail(retcode, caller, gitcmd)
 # End def gitCommitAll
 
 def gitApplyTag(repo, tag, message):
@@ -694,7 +708,22 @@ def gitCaptureLog(repo):
     return logs
 # End gitCaptureLog
 
-def gitSetupDir(chkdir, repo, branch, rev, repoURL, auth_table, svn_author, preserve_dates):
+def findParentCommit(gitLog, svnRev):
+  "Find the commit with the closest (but not larger) svn revision"
+  rnum = int(svnRev)
+  commit = None
+  # The log should be in inverse order so stop at first hit
+  for log in gitLog:
+    gnum = log.revNum()
+    if (gnum < rnum):
+      commit = log.commit()
+      break
+    # End if
+  # End for
+  return commit
+# End def findParentCommit
+
+def gitSetupDir(chkdir, repo, branch, rev, repoURL, auth_table, svn_author, preserve_dates, default_author):
     """
     Check to see if directory (chkdir) exists and is okay to use
     Create chkdir (if necessary) and set current branch to master
@@ -718,7 +747,7 @@ def gitSetupDir(chkdir, repo, branch, rev, repoURL, auth_table, svn_author, pres
                     logs = list()
                     revstart = rev.revStart()
                     while len(logs) < 1:
-                        logs = svnCaptureLog(repoURL, revstart, auth_table, svn_author, preserve_dates)
+                        logs = svnCaptureLog(repoURL, revstart, auth_table, svn_author, preserve_dates, default_author=default_author)
                         if len(logs) < 1:
                             revstart = revstart + 1
                             if revstart > rev.revEnd():
@@ -727,8 +756,12 @@ def gitSetupDir(chkdir, repo, branch, rev, repoURL, auth_table, svn_author, pres
                         # End if
                     # End while
                     branchRev = logs[len(logs) - 1].revision()
-                    commit = findParentCommit(gitLog, tagRev)
-                    dirOK = (retcall(["git", "branch", branch, commit]) == 0)
+                    commit = findParentCommit(gitLog, revstart)
+                    if commit is None:
+                        perr("No appropriate master commit to start branch {}".format(branch))
+                    else:
+                        dirOK = (retcall(["git", "branch", branch, str(commit)]) == 0)
+                    # End if
                 else:
                     perr("ERROR: master must exist to create branch {}".format(branch))
                 # End if
@@ -806,31 +839,27 @@ def copySvn2Git(svnDir, gitDir):
     # End if
     for file in files:
         file1 = os.path.join(root, file)
-        file2 = os.path.join(gitDir, root, file)
+        file2 = os.path.join(parent, file)
         if file_diff(file1, file2):
+            if os.path.islink(file1):
+                pdir = os.path.dirname(file1)
+                # SVN symlinks cannot (correctly) be absolute pathnames
+                plink = os.path.join(pdir, os.readlink(file1))
+                if not os.path.exists(plink):
+                    # Do not try to copy a bad symlink
+                    print("WARNING: Not copying bad symlink, {}".format(plink))
+                    continue
+                # End if
+            # End if
             num_copies = num_copies + 1
             shutil.copy2(file1, file2)
+            # End if
         # End if
     # End for
   # End for
   os.chdir(currdir)
   return num_copies
 # End def copySvn2Git
-
-def findParentCommit(gitLog, svnRev):
-  "Find the commit with the closest (but not larger) svn revision"
-  rnum = int(svnRev)
-  commit = None
-  # The log should be in inverse order so stop at first hit
-  for log in gitLog:
-    gnum = log.revNum()
-    if (gnum < rnum):
-      commit = log.commit()
-      break
-    # End if
-  # End for
-  return commit
-# End def findParentCommit
 
 def processRevision(exportDir, gitDir, log):
   rnum = log.revision()
@@ -912,6 +941,11 @@ def parse_arguments():
                         the svn author is not found in the table.
                         Default is False
                         """)
+    parser.add_argument('--default-author', dest='default_author',
+                        metavar='[Name <email>]', type=str, nargs=1, default='',
+                        help="""An author entry to use when the svn author
+                        is not in the author table. This option is ignored if
+                        the --author-table argument is not supplied.""")
     parser.add_argument('--use-current-date', dest='current_date',
                         action='store_true', default=False,
                         help="""If True, use current date and time for each git commit.
@@ -939,6 +973,10 @@ def _main_func():
     branch_name = args.branch_name
     author_table = args.author_table
     svn_author = not args.git_author
+    if len(args.default_author) > 0:
+        default_author = args.default_author[0]
+    else:
+        default_author = None
     preserve_dates = not args.current_date
     revisions = args.revisions
 
@@ -979,7 +1017,7 @@ def _main_func():
     # End if
 
     # Make sure the git directory is ready to go
-    gitSetupDir(git_dir, repo_url, branch_name, revStart, repo_url, auth_table, svn_author, preserve_dates)
+    gitSetupDir(git_dir, repo_url, branch_name, revStart, repo_url, auth_table, svn_author, preserve_dates, default_author)
     # Collect all the old svn revision numbers
     gitLog = gitCaptureLog(git_dir)
     gitRevs = [ x.revNum() for x in gitLog ]
@@ -988,9 +1026,9 @@ def _main_func():
     svnLog = list()
     for rev in revlist:
         # Capture the log messages for range, 'rev'
-        logs = svnCaptureLog(repo_url, rev.revString(), auth_table, svn_author, preserve_dates)
+        logs = svnCaptureLog(repo_url, rev.revString(), auth_table, svn_author, preserve_dates, default_author=default_author)
         if (len(logs) > 0):
-            print("Adding {} revisions from {}".format(len(logs), rev.revString()))
+            print("Adding {} revisions from {} to {}".format(len(logs), rev.revString(), branch_name))
         else:
             print("No revisions found for {}".format(rev.revString()))
         # End if
@@ -1026,7 +1064,7 @@ def _main_func():
                     tag_url = os.path.join(tag_url, subdir[0])
                 # End if
                 tagRev = svnLastChangedRev(tag_url)
-                logs = svnCaptureLog(tag_url, tagRev, auth_table, svn_author, preserve_dates, tag=tag)
+                logs = svnCaptureLog(tag_url, tagRev, auth_table, svn_author, preserve_dates, tag=tag, default_author=default_author)
                 log = logs[0]
                 temp = log.revNum()
                 if temp < minRev:
