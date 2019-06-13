@@ -1,0 +1,6 @@
+SVN_EXTERNAL_DIRECTORIES
+chem_proc 
+src/physics/carma/base
+src/physics/cosp2/src
+src/physics/clubb
+src/physics/silhs

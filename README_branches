@@ -1,0 +1,84 @@
+How to add a CAM subversion branch to the git repository:
+
+1.  Determine the URL of the subversion repository for your branch, such as:
+
+    https://svn-ccsm-models.cgd.ucar.edu/cam1/branches/<branch_name>
+
+2.  Determine how many revisions to include, this can be done by typing the subversion command:
+
+    svn log https://svn-ccsm-models.cgd.ucar.edu/cam1/branches/<branch_name>
+
+    and finding how many revisions back you would like to bring forward to git.  Then record the revision number
+    of the furthest back revision you want to keep, which is stored as "rXXXX" on the top left of each log entry
+    (don't include the "r" itself). This will be labeled in the commands below as "base_revision".  Next, 
+    determine the revision number of your branch head by typing the subversion command:
+
+    svn info https://svn-ccsm-models.cgd.ucar.edu/cam1/branches/<branch_name>
+
+    and saving the number labeled "Revision".  This will be labeled in the commands below as "head_revision".
+
+3.  Record all authors who commited changes to the subversion branch.  This can be done by modifiying the file:
+
+    CAM_name_table.txt
+
+    With the text to the left of the colon the name as included in the subversion log (e.g. svn log), and the text
+    to the right the name and email as will be shown in the new git log.  Please note that the subversion name may
+    be just an ID, or a full email address, so it is worth checking (as the conversion will fail if these are mis-labeled).
+
+4.  Set externals to work with "manage_externals" script.  This can be done by setting three files:
+
+    cam_external_path_list.txt
+    Externals_CAM.cfg
+    Externals.cfg
+
+    which are stored in the:
+
+    external_files
+
+    local sub-directory.  The first file (cam_external_path_list.txt) contains a list of all the directories that
+    will need to be removed, as they are external and will thus be brought in via "manage_externals".  The list of
+    these particular directories can be found on your subversion branch by typing the command:
+
+    svn cat https://svn-ccsm-models.cgd.ucar.edu/cam1/branches/<branch_name>/components/cam/SVN_EXTERNAL_DIRECTORIES 
+
+    If your branch is old enough that the "components/cam" directory path isn't present, then simply replace it with whatever
+    path is required to open the "SVN_EXTERNAL_DIRECTORIES" file present in the CAM sub-directory (NOT the top-level branch directory!).
+    Once the command is run you should see two columns.  The first column should be copied into the "cam_external_path_list.txt" file under
+    the "SVN_EXTERNAL_DIRECTORIES" already present in the text file.  The second column will include repository paths that will need to be
+    added to the "Externals_CAM.cfg" file, likely replacing the externals already present in the example file.
+
+    Finally, determine your component externals by typing the subversion command:
+
+    svn cat https://svn-ccsm-models.cgd.ucar.edu/cam1/branches/<branch_name>/Externals.cfg
+
+    and copying the output to the "Externals.cfg" file present in the "external_files" sub-directory, replacing everything EXCEPT the lines:
+
+    [cam]
+    local_path = .
+    protocol = externals_only
+    externals = Externals_CAM.cfg 
+    required = True
+
+    Which need to remain in the new file.
+
+5.  Clone the CAM git repository.  This can be done via the command:
+
+    git clone <DONT KNOW GIT URL PATH YET!>/<git_repo_name>
+
+6.  Convert your subversion branch to a git branch via the command:
+
+    ./svn_select_to_git.py --author-table CAM_name_table.txt --branch <branch_name> --cam-ext-list external_files/cam_external_path_list.txt \
+                           --rev <base_revision>:<head_revision> <svn_local_name> <git_repo_name> https://svn-ccsm-models.cgd.ucar.edu/cam1/branches/<branch_name>
+
+    Where "svn_local_name" is the name of the directory that the script will create to store a local copy of your branch in.
+
+7.  Once finished, go to the git repo directory (which now should be set to your newly created branch) and do any manual checking/testing that is required,
+    like running the simulation once to make sure it works.  Once everything is ok, push your branch to the main github repository using the command:
+
+    git push  (NOTE:  HAVEN'T ACTUALLY DONE THIS YET, AS THERE IS NOTHING TO PUSH TO!).
+
+    while inside the local git directory.  Congratulations!  Your branch is now on github.
+
+8.  If you have any problems, issues, or concerns, please feel free to send an email to Jesse Nusbaumer (nusbaume@ucar.edu). 
+
+Good luck!
