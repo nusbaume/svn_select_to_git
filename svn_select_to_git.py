@@ -892,6 +892,124 @@ def processRevision(exportDir, gitDir, log):
   # End if
 # End def processRevision
 
+############################################
+###
+### SVN Externals -> Externals_CAM functions
+###
+############################################
+
+def ReadExternalList(filename):
+    """Reads in text file list of CAM external directories/files"""
+
+    #Check if file exists:
+    if not os.path.exists(filename):
+        perr("External list, '{}', does not exist".format(filename))
+
+    ext_list = {}
+    try:
+        with open(filename) as f:
+            #Read in each line separately:
+            ext_list = f.readlines()
+     
+            #Remove any white space and endlines:
+            ext_list = [x.strip() for x in ext_list]                                
+
+    #Catch any errors, if present: 
+    except ValueError as e:
+        perr(e)
+    except Exception as e:
+        perr(e)
+
+    #Return external list:
+    return ext_list
+
+def git_external_svn_cam_remove(git_dir, ext_list, git_commit, git_com_msg):
+    """Removes all SVN external directories,
+       along with the 'SVN_EXTERNAL_DIRECTORIES' file,
+       in the cam sub-directory"""
+
+    #Determine current directory:
+    currdir = os.getcwd()
+
+    #Set CAM git directory:
+    cam_dir = git_dir+"/components/cam"
+
+    #Go to new git CAM directory:
+    os.chdir(cam_dir)
+   
+    #Remove all SVN external directories and files:
+    for ext in ext_list:
+       #apply git remove:
+       retcode = retcall(["git", "rm", "-r", ext])   
+
+       #quit if git remove fails:
+       caller = "git rm -r {} in {}".format(ext, cam_dir)
+       quitOnFail(retcode, caller)
+
+    #Commit changes to git repository:
+    if git_commit:
+      retcode = retcall("git", "commit", "-m", git_com_msg)
+
+      #quit if git commit fails:
+      caller = "git commit -m {} in {}".format(git_com_msg, cam_dir)
+      quitOnFail(retcode, caller)
+
+    #Return to original directory:
+    os.chdir(currdir)
+
+def git_external_cfg_cam_add(git_dir, git_commit, git_com_msg):
+    """Adds 'Externals_CAM.cfg' file to
+       git directory, along with a modified
+       'Externals.cfg' file needed to use the
+       the new CAM cfg file."""
+
+    #Set file names:
+    cam_ext_file  = "Externals_CAM.cfg"
+    head_ext_file = "Externals.cfg"
+
+    #Determine current directory:
+    currdir = os.getcwd()
+
+    #Determine externals directory:
+    extdir = currdir + "/external_files/"
+
+    #Go to new git (top-level) directory:
+    os.chdir(git_dir)   
+
+    #Copy new Externals_CAM.cfg file to git repository:
+    retcode = retcall(["cp", extdir+cam_ext_file, "."])     
+
+    #Add new Externals_CAM.cfg file to git:
+    retcode = retcall(["git", "add", cam_ext_file])
+
+    #Quit if git add fails:
+    caller = "git add {} in {}".format(cam_ext_file, git_dir)
+    quitOnFail(retcode, caller) 
+
+    #Delete current Externals.cfg file in git repository:
+    retcode = retcall(["git", "rm", head_ext_file])
+
+    #copy new Externals.cfg file to git repository:
+    retcode = retcall(["cp", extdir+head_ext_file, "."])     
+
+    #Add new Externals.cfg file to git:
+    retcode = retcall(["git", "add", head_ext_file])
+
+    #Quit if git add fails:
+    caller = "git add {} in {}".format(head_ext_file, git_dir)
+    quitOnFail(retcode, caller)
+
+    #Commit changes to git respository:
+    if git_commit:
+      retcode = retcall(["git", "commit", "-m", git_com_msg])
+
+      #quit if git commit fails:
+      caller = "git commit -m {} in {}".format(git_com_msg, git_dir)
+      quitOnFail(retcode, caller)
+
+    #Return to original directory:
+    os.chdir(currdir)
+
 ##############################
 ###
 ### Beginning of main program
@@ -954,6 +1072,19 @@ def parse_arguments():
     parser.add_argument('--rev', dest='revisions', metavar="<revision>", type=str,
                         action='append',
                         help="revision, list of revisions or revision range")
+    parser.add_argument('--no-external-cfg', dest='no_extern',
+                        action='store_true', default=False,
+                        help="""If True, the CAM SVN externals will not be modified
+                                to work with the manage_externals routine.  If
+                                False, the SVN externals will be removed in the
+                                new git repository and replaced with Externals_CAM.cfg.
+                                The default is False""")
+    parser.add_argument('--cam-ext-list', dest='ext_list_fil',
+                        type=str, nargs=1, default='',metavar='<externals_list_filename>',
+                        help="""Text file containing the paths and subdirectories
+                                for all CAM externals.  Please note the paths are relative
+                                to components/cam.  Also note that this list will do nothing
+                                if the '--no-external-cfg' flag is set.""")
 
     args = parser.parse_args()
     return args
@@ -972,13 +1103,21 @@ def _main_func():
     tag_url = args.tag_url
     branch_name = args.branch_name
     author_table = args.author_table
-    svn_author = not args.git_author
+    svn_author  = not args.git_author
     if len(args.default_author) > 0:
         default_author = args.default_author[0]
     else:
         default_author = None
     preserve_dates = not args.current_date
     revisions = args.revisions
+
+    #For externals:
+    #-------------
+    external = not args.no_extern
+    if external:
+      ext_list_fil = args.ext_list_fil
+      ext_list = ReadExternalList(ext_list_fil[0])
+    #-------------
 
     export_dir = os.path.abspath(export_dir)
     git_dir = os.path.abspath(git_dir)
@@ -1075,7 +1214,7 @@ def _main_func():
                     print("Skipping tag revision {}, already scheduled".format(temp))
                 else:
                     svnLog.append(log)
-                # End if
+                # End ifrepo_url = https://svn-ccsm-models.cgd.ucar.edu/silhs/vendo
                 # XXgoldyXX: Check file size (os.path.getsize())
             # End for
         # End if
@@ -1089,6 +1228,26 @@ def _main_func():
         processRevision(export_dir, git_dir, log)
     # End for
 # End _main_func
+
+    #Convert SVN CAM eternals to Externals_CAM.cfg
+    #---------------------------------------------
+    if external:  
+      print("Converting SVN CAM externals...")
+
+      #Set git commit message:
+      git_com_msg = 'CAM SVN dependencies converted to Externals_CAM.cfg'
+
+      #Remove old SVN CAM externals:
+      git_external_svn_cam_remove(git_dir, ext_list, False, git_com_msg)
+
+      #Add new Externals_CAM.cfg file to git repository:
+      git_external_cfg_cam_add(git_dir, True, git_com_msg)
+
+      print("...externals conversion complete.") 
+    else:
+      #Do nothing.
+      print("Leaving SVN CAM externals as is.")
+    #---------------------------------------------
 
 ###############################################################################
 
