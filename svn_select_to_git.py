@@ -898,30 +898,239 @@ def processRevision(exportDir, gitDir, log):
 ###
 ############################################
 
-def ReadExternalList(filename):
-    """Reads in text file list of CAM external directories/files"""
+def read_svn_externals_cam(svndir):
+    """Reads externals information from
+       the SVN_EXTERNAL_DIRECTORIES file
+       in the cam sub-directory."""
 
-    #Check if file exists:
-    if not os.path.exists(filename):
-        perr("External list, '{}', does not exist".format(filename))
+    #Check if SVN_EXTERNAL_DIRECTORIES exists, and is
+    #where we think it is:
+    if (not os.path.exists(os.path.join(svndir,"components/cam/SVN_EXTERNAL_DIRECTORIES"))):
+        perr("SVN_EXTERNAL_DIRECTORIES not in components/cam, need to \
+              add CAM externals to git manually")
 
-    ext_list = {}
+    #Set 'SVN_EXTERNAL_DIRECTORIES' file path:
+    svn_ext_filepath = os.path.join(svndir,"components/cam/SVN_EXTERNAL_DIRECTORIES")
+
+    #initalize externals list:
+    svn_ext_list = []
+
+    #Read in 'SVN_EXTERNAL_DIRECTORIES' file data:
     try:
-        with open(filename) as f:
-            #Read in each line separately:
-            ext_list = f.readlines()
-     
-            #Remove any white space and endlines:
-            ext_list = [x.strip() for x in ext_list]                                
+        #Open text file:
+        svn_ext_fil = open(svn_ext_filepath,'r')
+    except:
+        #Throw error if not openable:
+        perr("Failed to open {}".format(svn_ext_filepath))
 
-    #Catch any errors, if present: 
-    except ValueError as e:
-        perr(e)
-    except Exception as e:
-        perr(e)
+    #Read data to list:
+    svn_ext_list = svn_ext_fil.readlines()
 
-    #Return external list:
-    return ext_list
+    #Close externals file:
+    svn_ext_fil.close()
+
+    #Initalize lists:
+    cam_ext_path = []
+    cam_ext_url  = []
+
+    #Loop over all CAM externals:
+    for line in svn_ext_list:
+        #Seperate local path and external URL:
+        path_and_url = line.split()
+
+        #Append external path list:
+        cam_ext_path.append(path_and_url[0].strip())
+
+        #Append external url list:
+        cam_ext_url.append(path_and_url[1].strip())
+
+    #Return cam external paths (for deletion):
+    return [cam_ext_path,cam_ext_url]
+
+#+++++++++++++++++++++++
+
+def external_cam_cfg_create(svn_ext_list):
+    """Generates a new Externals_CAM.cfg
+       file based off the original
+      'SVN_EXTERNAL_DIRECTORIES' file,
+      and adds the needed externals line
+      to the top-level 'Externals.cfg' file."""
+
+    #Pull out individual lists:
+    cam_ext_path = svn_ext_list[0]
+    cam_ext_url  = svn_ext_list[1]
+
+    #Iinitalize lists:
+    ext_cfg_labels = []
+    ext_cfg_urls   = []
+    ext_cfg_tags   = []
+
+    #Determine external "labels":
+    #---------------------------
+    for line in cam_ext_path:
+        #Search for "src" line:
+        src_exist = line.find("src")  
+
+        #Is "src" present in path?
+        if(src_exist != -1):
+           #create new line:
+           newlin = line[src_exist:]
+
+           #Search for "physics" in new line:
+           phys_exist = newlin.find("physics")
+
+           #Is "physics" present in path? 
+           if(phys_exist != -1):
+               #Create new line:
+               newlin2 = newlin[phys_exist:]
+
+               #searh for "/" after "physics":
+               slash_exist = newlin2.find("/")
+
+               #Create new line:
+               newlin3 = newlin2[(slash_exist+1):]
+
+               #There will always be one "/", so check if there is more than one:
+               slash_exist3 = newlin3.find("/")
+
+               if(slash_exist3 != -1):
+                   #If more than one "/", then label is between the first and second "/":
+                   ext_cfg_labels.append(newlin3[:slash_exist3])
+               else:
+                   #If not, than label is entire line after "physics/":
+                   ext_cfg_labels.append(newlin2[(slash_exist+1):])
+           else:
+               #If not, then Create new line:
+               newlin = line[src_exist:]
+
+               #Search for "/" after "src":
+               slash_exist = newlin[src_exist:].find("/")
+            
+               #Create new line:
+               newlin2 = newlin[(slash_exist+1):]               
+
+               #There will always be one "/", so check if there is more than one:
+               slash_exist2 = newlin2.find("/")
+
+               if(slash_exist2 != -1):
+                   #If more than one "/", then label is between the first and second "/":
+                   ext_cfg_labels.append(newlin2[:slash_exist2])
+               else:
+                   #If no extra slash, then label is entire line after "src/":
+                   ext_cfg_labels.append(newlin[(slash_exist+1):])
+             
+        else:
+            #If not, then search for "/":
+            slash_exist = line.find("/")
+
+            if(slash_exist != -1):
+                #If slash, then label is line up to the slash:
+                ext_cfg_labels.append(line[:slash_exist[0]])
+            else:
+                #If no slash, then label is entire line:
+                ext_cfg_labels.append(line)
+
+    #--------------------------
+
+    #Determine external URLs and tags:
+    #--------------------------------
+    for line in cam_ext_url:
+
+        #Search for "tags" line:
+        tags_exist = line.find("tags")
+
+        #End script if "tags" string isn't found:    
+        if(tags_exist == -1):
+            perr("The 'tags' string is missing in external URL {}".format(line))
+    
+        #Determine repository URLs:
+        #Note:  Adding five to index to incorporate entire "tags/" string in URL
+        ext_cfg_urls.append(line[:(tags_exist+5)])
+
+        #Determine repository tag:
+        ext_cfg_tags.append(line[(tags_exist+5):])
+    #--------------------------------
+
+    #Write new "Externals_CAM.cfg" file:
+    #----------------------------------
+    #Set cfg file name:
+    cfg_fil_name = "Externals_CAM.cfg"
+    
+    #Determine local directory:
+    currdir = os.getcwd()
+
+    #Set full cfg file path:
+    cfg_file_path = os.path.join(currdir,cfg_fil_name)
+
+    #If file already exists, warn user and delete it:
+    if(os.path.exists(cfg_file_path)):
+        print("Local 'Externals_CAM.cfg' file already exists! Replacing it.")
+        #Remove file:
+        os.remove(cfg_file_path)
+
+    #Create new cfg file:
+    cfg_file = open(cfg_file_path,'w')
+
+    #Loop over external label indices:
+    for i in range(len(ext_cfg_labels)): 
+        #Add Externals label:
+        cfg_file.write("["+ext_cfg_labels[i]+"]\n")
+        #Add local path:
+        cfg_file.write("local_path = "+cam_ext_path[i]+"\n")
+        #Add protocol:
+        cfg_file.write("protocol = svn\n")
+        #Add URL:
+        cfg_file.write("repo_url = "+ext_cfg_urls[i]+"\n")
+        #Add tag:
+        cfg_file.write("tag = "+ext_cfg_tags[i]+"\n")
+        #Add "required" statement:
+        cfg_file.write("required = True\n")
+        #Add blank line:
+        cfg_file.write("\n")
+
+    #Add externals description to file:
+    cfg_file.write("[externals_description]\n")
+    cfg_file.write("schema_version = 1.0.0\n")
+    #Add blank line:
+    cfg_file.write("\n")
+
+    #Close cfg file:
+    cfg_file.close()
+    #----------------------------------
+
+#+++++++++++++++++++++
+
+def external_cfg_add_cam(git_dir):
+    """Adds a cam externals call to
+       the top-level 'Externals.cfg'
+       directory.""" 
+
+    #Set cfg file name:
+    cfg_fil_name = "Externals.cfg"
+
+    #Set full cfg file path:
+    cfg_file_path = os.path.join(git_dir,cfg_fil_name)
+
+    #Check if file exists.  If not, then kill the script:
+    if(not os.path.exists(cfg_file_path)):
+        perr("Externals.cfg is missing from local git repo! Subversion tag may need updating.")
+
+    #Open cfg file (to append):
+    cfg_file = open(cfg_file_path,'a')
+
+    #Add CAM externals to file:
+    cfg_file.write("[cam]\n")
+    cfg_file.write("local_path = .\n")
+    cfg_file.write("protocol = externals_only\n")
+    cfg_file.write("externals = Externals_CAM.cfg\n")
+    cfg_file.write("required = True\n")
+    #Add blank space:
+    cfg_file.write("\n")
+
+    #Close cfg file:
+    cfg_file.close()
+
+#+++++++++++++++++++++
 
 def git_external_svn_cam_remove(git_dir, ext_list, git_commit, git_com_msg):
     """Removes all SVN external directories,
@@ -932,27 +1141,31 @@ def git_external_svn_cam_remove(git_dir, ext_list, git_commit, git_com_msg):
     currdir = os.getcwd()
 
     #Set CAM git directory:
-    cam_dir = git_dir+"/components/cam"
+    cam_dir = os.path.join(git_dir,"components/cam")
 
     #Go to new git CAM directory:
     os.chdir(cam_dir)
    
+    #Pull out local external paths:
+    cam_ext_path = ext_list[0]
+
     #Remove all SVN external directories and files:
-    for ext in ext_list:
-       #apply git remove:
-       retcode = retcall(["git", "rm", "-r", ext])   
+    for ext in cam_ext_path:
 
-       #quit if git remove fails:
-       caller = "git rm -r {} in {}".format(ext, cam_dir)
-       quitOnFail(retcode, caller)
+        #apply git remove:
+        retcode = retcall(["git", "rm", "-r", ext])   
 
-    #Commit changes to git repository:
-    if git_commit:
-      retcode = retcall("git", "commit", "-m", git_com_msg)
+        #quit if git remove fails:
+        caller = "git rm -r {} in {}".format(ext, cam_dir)
+        quitOnFail(retcode, caller)
 
-      #quit if git commit fails:
-      caller = "git commit -m {} in {}".format(git_com_msg, cam_dir)
-      quitOnFail(retcode, caller)
+        #Commit changes to git repository:
+        if git_commit:
+            retcode = retcall("git", "commit", "-m", git_com_msg)
+
+        #quit if git commit fails:
+        caller = "git commit -m {} in {}".format(git_com_msg, cam_dir)
+        quitOnFail(retcode, caller)
 
     #Return to original directory:
     os.chdir(currdir)
@@ -970,14 +1183,14 @@ def git_external_cfg_cam_add(git_dir, git_commit, git_com_msg):
     #Determine current directory:
     currdir = os.getcwd()
 
-    #Determine externals directory:
-    extdir = currdir + "/external_files/"
+    #Determine full CAM externals file path:
+    cam_ext_full_path = os.path.join(currdir,cam_ext_file)
 
     #Go to new git (top-level) directory:
     os.chdir(git_dir)   
 
     #Copy new Externals_CAM.cfg file to git repository:
-    retcode = retcall(["cp", extdir+cam_ext_file, "."])     
+    retcode = retcall(["mv", cam_ext_full_path, "."])     
 
     #Add new Externals_CAM.cfg file to git:
     retcode = retcall(["git", "add", cam_ext_file])
@@ -987,10 +1200,10 @@ def git_external_cfg_cam_add(git_dir, git_commit, git_com_msg):
     quitOnFail(retcode, caller) 
 
     #Delete current Externals.cfg file in git repository:
-    retcode = retcall(["git", "rm", head_ext_file])
+    #retcode = retcall(["git", "rm", head_ext_file])
 
     #copy new Externals.cfg file to git repository:
-    retcode = retcall(["cp", extdir+head_ext_file, "."])     
+    #retcode = retcall(["cp", extdir+head_ext_file, "."])     
 
     #Add new Externals.cfg file to git:
     retcode = retcall(["git", "add", head_ext_file])
@@ -1001,11 +1214,87 @@ def git_external_cfg_cam_add(git_dir, git_commit, git_com_msg):
 
     #Commit changes to git respository:
     if git_commit:
-      retcode = retcall(["git", "commit", "-m", git_com_msg])
+        retcode = retcall(["git", "commit", "-m", git_com_msg])
 
-      #quit if git commit fails:
-      caller = "git commit -m {} in {}".format(git_com_msg, git_dir)
-      quitOnFail(retcode, caller)
+        #quit if git commit fails:
+        caller = "git commit -m {} in {}".format(git_com_msg, git_dir)
+        quitOnFail(retcode, caller)
+
+    #Return to original directory:
+    os.chdir(currdir)
+
+########################################
+###
+###Git repository re-arrangement scripts
+###
+########################################
+
+def git_cam_dir_top_move(git_dir, git_commit, git_com_msg):
+    """Moves the 'components/cam' directory
+       to the top-level of the local git repository."""
+
+    #Determine current directory:
+    currdir = os.getcwd()
+
+    #Go to new git (top-level) directory:
+    os.chdir(git_dir)
+
+    #Move component/cam/bld to top-level git repository:
+    retcode = retcall(["git", "mv", "-k", "components/cam/bld", "."])
+
+    #Quit if git move fails:
+    caller = "git mv -k components/cam/bld in {}".format(git_dir)
+    quitOnFail(retcode, caller)
+
+    #Move component/cam/cime_config to top-level git repository:
+    retcode = retcall(["git", "mv", "-k", "components/cam/cime_config", "."])
+
+    #Quit if git move fails:
+    caller = "git mv -k components/cam/cime_config in {}".format(git_dir)
+    quitOnFail(retcode, caller)
+
+    #Move component/cam/doc to top-level git repository:
+    retcode = retcall(["git", "mv", "-k", "components/cam/doc", "."])
+
+    #Quit if git move fails:
+    caller = "git mv -k components/cam/doc in {}".format(git_dir)
+    quitOnFail(retcode, caller)
+
+    #Move component/cam/src to top-level git repository:
+    retcode = retcall(["git", "mv", "-k", "components/cam/src", "."])
+
+    #Quit if git move fails:
+    caller = "git mv -k components/cam/src in {}".format(git_dir)
+    quitOnFail(retcode, caller)
+
+    #Move component/cam/test to top-level git repository:
+    retcode = retcall(["git", "mv", "-k", "components/cam/test", "."])
+
+    #Quit if git move fails:
+    caller = "git mv -k components/cam/test in {}".format(git_dir)
+    quitOnFail(retcode, caller)
+
+    #Move component/cam/tools to top-level git repository:
+    retcode = retcall(["git", "mv", "-k", "components/cam/tools", "."])
+
+    #Quit if git move fails:
+    caller = "git mv -k components/cam/tools in {}".format(git_dir)
+    quitOnFail(retcode, caller)
+
+    #Remove old "components/cam" directory:
+    retcode = retcall(["git", "rm", "-r", "components"])
+
+    #Quit if git rm fails:
+    caller = "git rm -r components failed in {}".format(git_dir)
+    quitOnFail(retcode, caller)
+
+    #Commit changes to git respository:
+    if git_commit:
+        retcode = retcall(["git", "commit", "-m", git_com_msg])
+
+        #quit if git commit fails:
+        caller = "git commit -m {} in {}".format(git_com_msg, git_dir)
+        quitOnFail(retcode, caller)
 
     #Return to original directory:
     os.chdir(currdir)
@@ -1079,12 +1368,13 @@ def parse_arguments():
                                 False, the SVN externals will be removed in the
                                 new git repository and replaced with Externals_CAM.cfg.
                                 The default is False""")
-    parser.add_argument('--cam-ext-list', dest='ext_list_fil',
-                        type=str, nargs=1, default='',metavar='<externals_list_filename>',
-                        help="""Text file containing the paths and subdirectories
-                                for all CAM externals.  Please note the paths are relative
-                                to components/cam.  Also note that this list will do nothing
-                                if the '--no-external-cfg' flag is set.""")
+    parser.add_argument('--no-cam-move', dest='no_cam_move',
+                        action='store_true', default=False,
+                        help="""If True, the components/cam directory will be left
+                                in the same location.  If False, all of the cam files
+                                will be moved to the top-level of the local git repository.
+                                The default is False""")
+                                
 
     args = parser.parse_args()
     return args
@@ -1112,12 +1402,10 @@ def _main_func():
     revisions = args.revisions
 
     #For externals:
-    #-------------
     external = not args.no_extern
-    if external:
-      ext_list_fil = args.ext_list_fil
-      ext_list = ReadExternalList(ext_list_fil[0])
-    #-------------
+
+    #For CAM code location:
+    cam_move = not args.no_cam_move
 
     export_dir = os.path.abspath(export_dir)
     git_dir = os.path.abspath(git_dir)
@@ -1214,7 +1502,7 @@ def _main_func():
                     print("Skipping tag revision {}, already scheduled".format(temp))
                 else:
                     svnLog.append(log)
-                # End ifrepo_url = https://svn-ccsm-models.cgd.ucar.edu/silhs/vendo
+                # End if
                 # XXgoldyXX: Check file size (os.path.getsize())
             # End for
         # End if
@@ -1232,21 +1520,48 @@ def _main_func():
     #Convert SVN CAM eternals to Externals_CAM.cfg
     #---------------------------------------------
     if external:  
-      print("Converting SVN CAM externals...")
+        print("Converting SVN CAM externals...")
 
-      #Set git commit message:
-      git_com_msg = 'CAM SVN dependencies converted to Externals_CAM.cfg'
+        #Set git commit message:
+        git_com_msg = 'CAM SVN dependencies converted to Externals_CAM.cfg'
 
-      #Remove old SVN CAM externals:
-      git_external_svn_cam_remove(git_dir, ext_list, False, git_com_msg)
+        #Determine CAM SVN Externals:
+        svn_ext_list = read_svn_externals_cam(export_dir)
 
-      #Add new Externals_CAM.cfg file to git repository:
-      git_external_cfg_cam_add(git_dir, True, git_com_msg)
+        #Create new 'manage_externals' cfg file for CAM:
+        external_cam_cfg_create(svn_ext_list)          
 
-      print("...externals conversion complete.") 
+        #Modify top-level "Externals.cfg" to read-in CAM cfg file:
+        external_cfg_add_cam(git_dir) 
+
+        #Remove old SVN CAM externals:
+        git_external_svn_cam_remove(git_dir, svn_ext_list, False, git_com_msg)
+
+        #Add new cfg files to git repository:
+        git_external_cfg_cam_add(git_dir, True, git_com_msg)
+
+        print("...externals conversion complete.") 
     else:
-      #Do nothing.
-      print("Leaving SVN CAM externals as is.")
+        #Do nothing.
+        print("Leaving SVN CAM externals as is.")
+    #---------------------------------------------
+
+    #Move cam code to head of git repo, and commit:
+    #---------------------------------------------
+    if cam_move:
+        print("Moving CAM to top-level directory in git repo...")
+
+        #Set git commit message:
+        git_com_msg = 'CAM components moved to top-level directory'
+
+        #Move all cam code to top-level directory:
+        git_cam_dir_top_move(git_dir, True, git_com_msg)     
+
+        print("...CAM move complete.")
+    else:
+        #Do nothing.
+        print("Leaving CAM location as is.")
+
     #---------------------------------------------
 
 ###############################################################################
