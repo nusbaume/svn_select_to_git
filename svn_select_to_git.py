@@ -623,8 +623,7 @@ def gitRmFile(repo, filename):
     caller = "gitRmFile {} {}".format(repo, filename)
     currdir = os.getcwd()
     os.chdir(repo)
-#    retcode = retcall(["git", "rm", filename])
-    retcode = retcall(["git", "rm", "--ignore-unmatch", filename])
+    retcode = retcall(["git", "rm", filename])
     os.chdir(currdir)
     quitOnFail(retcode, caller)
 # End def gitRmFile
@@ -653,7 +652,11 @@ def gitCommitAll(repo, message, author=None, date=None):
     if date is not None:
         gitcmd.append("--date='{}'".format(date))
 
-    gitcmd.append("--message={}".format(message))
+    #Need to add quotes to message string, to 
+    #avoid git error when "/" is present in the message:
+    full_message = "'"+message+"'"
+    #gitcmd.append("--message={}".format(message))
+    gitcmd.append("--message={}".format(full_message))
     retcode = retcall(gitcmd)
     os.chdir(currdir)
     quitOnFail(retcode, caller, gitcmd)
@@ -820,14 +823,9 @@ def FindTreeOrphans(dir1, dir2):
       #Add file to orphan list if not an external:
       if not ext_check:
         for file in files:
-          #Don't add "SVN_EXTERNAL_DIRECTORIES_CAM" to orphan list/git repo:
-          if file != 'SVN_EXTERNAL_DIRECTORIES_CAM': 
-            fname1 = os.path.join(root, file).lstrip("./")
-            fname2 = os.path.join(dir2, fname1)
-            if (not os.path.exists(os.path.join(dir2, fname1))):
-              orphans.append(fname1)
-
-            # End if
+          fname = os.path.join(root, file).lstrip("./")
+          if (not os.path.exists(os.path.join(dir2, fname))):
+             orphans.append(fname)
           # End if
         # End for
       # End if
@@ -878,6 +876,16 @@ def processRevision(exportDir, gitDir, log, external, cam_move):
   print("Processing revision {}, tag = {}".format(int(rnum), tag))
   svnExport(exportDir, log.url(), rnum)
 
+  #-----------------------------
+  #Create Externals_CAM.cfg file
+  #-----------------------------
+  if external:
+      #Determine CAM SVN Externals:
+      svn_ext_list = read_svn_externals_cam(exportDir)
+
+      #Create new 'manage_externals' cfg file for CAM:
+      external_cam_cfg_create(svn_ext_list)
+
   #-----------------------------------------
   #Move "components/cam" to head of svn repo
   #-----------------------------------------
@@ -902,16 +910,10 @@ def processRevision(exportDir, gitDir, log, external, cam_move):
   # End for
   # Commit everything
 
-  #-------------------------------------
-  #Create and add Externals_CAM.cfg file
-  #-------------------------------------
+  #--------------------------------------
+  #Add Externals_CAM.cfg file to git repo
+  #--------------------------------------
   if external:
-      #Determine CAM SVN Externals:
-      svn_ext_list = read_svn_externals_cam(exportDir)
-
-      #Create new 'manage_externals' cfg file for CAM:
-      external_cam_cfg_create(svn_ext_list)
-
       #Modify top-level "Externals.cfg" to read-in CAM cfg file:
       external_cfg_add_cam(gitDir)
 
@@ -935,11 +937,11 @@ def processRevision(exportDir, gitDir, log, external, cam_move):
 ############################################
 
 #Create externals label dictionary:
-ext_label_dict = dict([('./chem_proc','chem_proc'),
-                       ('./src/physics/carma/base','carma'),
-                       ('./src/physics/clubb','clubb'),
-                       ('./src/physics/cosp2/src','cosp2'),
-                       ('./src/physics/silhs','silhs')])
+ext_label_dict = {'chem_proc':'chem_proc',
+                  'src/physics/carma/base':'carma',
+                  'src/physics/clubb':'clubb',
+                  'src/physics/cosp2/src':'cosp2',
+                  'src/physics/silhs':'silhs'}
 
 def external_cam_check(root_dir):
     """Checks if the directory is listed 
@@ -950,7 +952,7 @@ def external_cam_check(root_dir):
 
     #Loop over paths in dictionary:
     for path in ext_dict_keys:
- 
+
         #Look for path in directory:
         path_find = root_dir.find(path)
 
@@ -972,14 +974,14 @@ def read_svn_externals_cam(svndir):
        the SVN_EXTERNAL_DIRECTORIES file
        in the cam sub-directory."""
 
-    #Check if SVN_EXTERNAL_DIRECTORIES_CAM exists, and is
+    #Check if CAM's SVN_EXTERNAL_DIRECTORIES file exists, and is
     #where we think it is:
-    if not os.path.exists(os.path.join(svndir,"SVN_EXTERNAL_DIRECTORIES_CAM")):
-        perr("SVN_EXTERNAL_DIRECTORIES_CAM is not present, need to \
+    if not os.path.exists(os.path.join(svndir,"components","cam","SVN_EXTERNAL_DIRECTORIES")):
+        perr("CAM's SVN_EXTERNAL_DIRECTORIES is not present, need to \
               add CAM externals to git manually")
 
-    #Set 'SVN_EXTERNAL_DIRECTORIES_CAM' file path:
-    svn_ext_filepath = os.path.join(svndir,"SVN_EXTERNAL_DIRECTORIES_CAM")
+    #Set CAM's 'SVN_EXTERNAL_DIRECTORIES' file path:
+    svn_ext_filepath = os.path.join(svndir,"components","cam","SVN_EXTERNAL_DIRECTORIES")
 
     #initalize externals list:
     svn_ext_list = []
@@ -1028,11 +1030,8 @@ def external_cam_cfg_create(svn_ext_list):
     #Determine external "labels":
     #---------------------------
     for line in cam_ext_path:
-        #Add "./" to match dictionary keys:
-        full_path = os.path.join("./",line)
-
         #Look up label from dictionary
-        label = ext_label_dict[full_path]
+        label = ext_label_dict[line]
 
         #Add label to list:
         ext_cfg_labels.append(label)
@@ -1216,8 +1215,8 @@ def svn_cam_dir_top_move(svn_dir):
     #Move component/cam/tools to top-level svn repository:
     os.rename("components/cam/tools","./tools")
 
-    #Move components SVN_EXTERNAL_DIRECTORIES to "SVN_EXTERNAL_DIRECTORIES_CAM":
-    os.rename("components/cam/SVN_EXTERNAL_DIRECTORIES","./SVN_EXTERNAL_DIRECTORIES_CAM")
+    #Remove "components/cam" directory, including "SVN_EXTERNAL_DIRECTORIES" file:
+    shutil.rmtree("components")
 
     #Return to original directory:
     os.chdir(currdir)
@@ -1332,6 +1331,11 @@ def _main_func():
 
     export_dir = os.path.abspath(export_dir)
     git_dir = os.path.abspath(git_dir)
+
+    #Script currently doesn't appear to work with Python version 3, so kill
+    #script with warning if python 3 or greater is being used: 
+    if sys.version_info[0] >= 3:
+        perr("Script only works with Python 2. Please switch python versions.")
 
     if len(author_table) > 0:
         auth_table = parseAuthorTable(author_table[0])
