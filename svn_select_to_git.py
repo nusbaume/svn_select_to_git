@@ -337,10 +337,10 @@ def svnExport(exportDir, repoURL, revstr=None):
     # End if
     if (revstr is None):
         caller = "svnExport {} {}".format(exportDir, repoURL)
-        retcode = scall(["svn", "export", repoURL, exportDir])
+        retcode = scall(["svn", "export", "--ignore-externals", repoURL, exportDir])
     else:
         caller = "svnExport -r{} {} {}".format(revstr, repoURL, exportDir)
-        retcode = retcall(["svn", "export", "-r{}".format(revstr), repoURL, exportDir])
+        retcode = retcall(["svn", "export", "--ignore-externals", "-r{}".format(revstr), repoURL, exportDir])
     # End if
     quitOnFail(retcode, caller)
 # End def svnExport
@@ -376,7 +376,8 @@ def svnLastChangedRev(url):
     return rev
 # End def svnLastChangedRev
 
-def svnCaptureLog(repoURL, revstr, auth_table, svn_auth, keep_dates, tag=None, default_author=None):
+def svnCaptureLog(repoURL, revstr, auth_table, svn_auth, keep_dates, tag=None, default_author=None, \
+                  tag_rev_list=None, tag_str_list=None):
     logs = []
     caller = "svnCaptureLog {} {}".format(repoURL, revstr)
     log = checkOutput(["svn", "log", "--stop-on-copy", "-r{}".format(revstr), repoURL])
@@ -390,7 +391,35 @@ def svnCaptureLog(repoURL, revstr, auth_table, svn_auth, keep_dates, tag=None, d
                 lines.append(line)
                 nlines = nlines - 1
                 if (nlines == 0):
-                    logs.append(SvnLogEntry(rev, who, when, repoURL, lines, tag=tag))
+                    #Does tag list exist?
+                    #---------------------
+                    if tag_rev_list is not None:
+                        #The revision tag is always one ahead of trunk/branch
+                        #       revision, so one should be added to the revision during search.
+                        rev_p1 = str(int(rev)+1)
+
+                        #If so, try searching for revision in tag revision list:
+                        try:
+                        #Note:  The revision tag is always one ahead of trunk/branch
+                        #       revision, so one should be added to the revision during search.
+                            rev_idx = tag_rev_list.index(rev_p1)
+                        except ValueError:
+                            #If not found, then just set rev_idx to -1:
+                            rev_idx = -1
+
+                        #Does revision exist in list?
+                        if rev_idx != -1:
+                            #If so, then set tag string:
+                            tag_str = tag_str_list[rev_idx]
+                        else:
+                            #If not, set tag string to None:
+                            tag_str = None
+                    else:
+                        #If no tag list is present, set tag labels to None:
+                        tag_str = None
+                    #---------------------
+
+                    logs.append(SvnLogEntry(rev, who, when, repoURL, lines, tag=tag_str))
                     del(lines[:])
                     lines = []
                 # End if
@@ -655,8 +684,8 @@ def gitCommitAll(repo, message, author=None, date=None):
     #Need to add quotes to message string, to 
     #avoid git error when "/" is present in the message:
     full_message = "'"+message+"'"
-    #gitcmd.append("--message={}".format(message))
     gitcmd.append("--message={}".format(full_message))
+
     retcode = retcall(gitcmd)
     os.chdir(currdir)
     quitOnFail(retcode, caller, gitcmd)
@@ -818,17 +847,12 @@ def FindTreeOrphans(dir1, dir2):
   os.chdir(dir1)
   for root, dirs, files in os.walk("."):
     if (root[0:len(groot)] != groot):
-      #Check if directory is an external:
-      ext_check = external_cam_check(root)
-      #Add file to orphan list if not an external:
-      if not ext_check:
-        for file in files:
-          fname = os.path.join(root, file).lstrip("./")
-          if (not os.path.exists(os.path.join(dir2, fname))):
-             orphans.append(fname)
-          # End if
-        # End for
-      # End if
+      for file in files:
+        fname = os.path.join(root, file).lstrip("./")
+        if (not os.path.exists(os.path.join(dir2, fname))):
+          orphans.append(fname)
+        # End if
+      # End for
     # End if
   # End for
   os.chdir(currdir)
@@ -919,6 +943,9 @@ def processRevision(exportDir, gitDir, log, external, cam_move):
 
       #Add new cfg files to git repository:
       git_external_cfg_cam_add(gitDir, False, "")
+
+      #Add "manage_externals" remote to git repository:
+      git_manage_external_add(gitDir)
   #---------------------------------------------
 
   if num_changes > 0:
@@ -942,32 +969,6 @@ ext_label_dict = {'chem_proc':'chem_proc',
                   'src/physics/clubb':'clubb',
                   'src/physics/cosp2/src':'cosp2',
                   'src/physics/silhs':'silhs'}
-
-def external_cam_check(root_dir):
-    """Checks if the directory is listed 
-       in the CAM externals dictionary."""
-
-    #Pull out dictionary keys/paths:
-    ext_dict_keys = ext_label_dict.keys()
-
-    #Loop over paths in dictionary:
-    for path in ext_dict_keys:
-
-        #Look for path in directory:
-        path_find = root_dir.find(path)
-
-        #set output logical:
-        if path_find != -1:
-            #Path is present, set check to true:
-            ext_check = True
-            #end current loop:
-            break
-        else:
-            #Path is not present, set to false.
-            ext_check = False
-
-    #Return logical:
-    return ext_check
 
 def read_svn_externals_cam(svndir):
     """Reads externals information from
@@ -1177,6 +1178,53 @@ def git_external_cfg_cam_add(git_dir, git_commit, git_com_msg):
     #Return to original directory:
     os.chdir(currdir)
 
+def git_manage_external_add(git_dir):
+    """Adds the "manage_externals" routines
+       from a remote git repo to the local
+       cam git repo."""
+
+    #Determine current directory:
+    currdir = os.getcwd()
+
+    #Go to new git (top-level) directory:
+    os.chdir(git_dir)
+
+    #Check if "manage_externals" directory does not exist:
+    if not os.path.exists("manage_externals"):
+        #Read in list of git remotes:
+        remote_list = checkOutput(["git", "remote"])
+        
+        #Search for "manage_externals" in list:
+        manage_exist = remote_list.find("manage_externals")
+
+        if(manage_exist != -1):
+            #If remote is present, simply add remote tree to repo:
+            retcode = retcall(["git", "read-tree", "--prefix=manage_externals", \
+                                "-u", "a48558d890d46c51c2508f97aed64b5dd1716b74"])
+
+            #Quit if git  read-tree fails:
+            caller = "git read-tree of manage_externals in {}".format(git_dir)
+            quitOnFail(retcode, caller)
+        else:
+            #If not present, add "manage_externals" remote:
+            retcode = retcall(["git", "remote", "add", "-f", "--tags", "manage_externals", \
+                               "https://github.com/ESMCI/manage_externals"])
+
+            #Quit if git remote add fails:
+            caller = "git remote add of manage_externals in {}".format(git_dir)
+            quitOnFail(retcode, caller)            
+
+            #Now add remote tree to repo:
+            retcode = retcall(["git", "read-tree", "--prefix=manage_externals", \
+                                "-u", "a48558d890d46c51c2508f97aed64b5dd1716b74"])
+
+            #Quit if git  read-tree fails:
+            caller = "git read-tree of manage_externals in {}".format(git_dir)
+            quitOnFail(retcode, caller)
+
+    #Return to original directory:
+    os.chdir(currdir)
+
 ############################################
 ###
 ###SVN/Git repository re-arrangement scripts
@@ -1193,9 +1241,6 @@ def svn_cam_dir_top_move(svn_dir):
 
     #Go to new subversion (top-level) directory:
     os.chdir(svn_dir)
-
-    #Move components/cam/chem_proc to top-level svn repository:
-    os.rename("components/cam/chem_proc","./chem_proc")
 
     #Move components/cam/bld to top-level svn repository:
     os.rename("components/cam/bld","./bld")
@@ -1217,6 +1262,9 @@ def svn_cam_dir_top_move(svn_dir):
 
     #Remove "components/cam" directory, including "SVN_EXTERNAL_DIRECTORIES" file:
     shutil.rmtree("components")
+
+    #Remove top-level "SVN_EXTERNAL_DIRECTORIES" file:
+    os.remove("SVN_EXTERNAL_DIRECTORIES")
 
     #Return to original directory:
     os.chdir(currdir)
@@ -1248,7 +1296,7 @@ def parse_arguments():
                         type=str, nargs=1, default='',
                         help="A subdirectory from which to draw files")
     parser.add_argument('--tags', dest='tag_url', metavar='<tag_url>',
-                        type=str, nargs=1, action='append', default='',
+                        type=str, nargs=1, action='store', default='',
                         help="the svn URL for tags related to <tag_url>")
     parser.add_argument('--branch', dest='branch_name', metavar='<branch_name>',
                         type=str, nargs=1, action='store', default='',
@@ -1376,11 +1424,41 @@ def _main_func():
     gitLog = gitCaptureLog(git_dir)
     gitRevs = [ x.revNum() for x in gitLog ]
 
+    # Create new tag lists:
+    tag_rev_list = list()
+    tag_str_list = list()
+
+    # Determine the subversion revisions associated with each tag (if any):
+    if (len(tag_url) > 0):
+        print("Processing tags from {}".format(tag_url[0]))
+        # Find all the tags:
+        svnTags = svnList(tag_url[0])
+        if (svnTags is not None):
+            for tag in svnTags:
+                # Set the correct URL for the repo
+                tag_url_full = os.path.join(tag_url[0], tag)
+                if (len(subdir) > 0):
+                    tag_url_full = os.path.join(tag_url_full, subdir[0])
+                # End if
+                #Dtermine revision associated with tag:
+                tagRev = svnLastChangedRev(tag_url_full)
+                #Add tag to lists:
+                tag_str_list.append(tag)
+                tag_rev_list.append(tagRev)
+
     # Capture all the revision log info
     svnLog = list()
     for rev in revlist:
-        # Capture the log messages for range, 'rev'
-        logs = svnCaptureLog(repo_url, rev.revString(), auth_table, svn_author, preserve_dates, default_author=default_author)
+        #check if tag lists are non-empty:
+        if tag_rev_list:
+            # Capture the log messages for range, 'rev' with tag included:
+            logs = svnCaptureLog(repo_url, rev.revString(), auth_table, svn_author, preserve_dates, default_author=default_author, \
+                                 tag_rev_list=tag_rev_list, tag_str_list=tag_str_list)
+        else:
+            # Capture the log messages for range, 'rev'
+            logs = svnCaptureLog(repo_url, rev.revString(), auth_table, svn_author, preserve_dates, default_author=default_author)
+        # End if
+
         if (len(logs) > 0):
             print("Adding {} revisions from {} to {}".format(len(logs), rev.revString(), branch_name))
         else:
@@ -1394,46 +1472,6 @@ def _main_func():
             # End if
         # End for
     # End for
-
-    # Process the requested tags (if any)
-    if (len(tag_url) > 0):
-        print("Processing tags from {}".format(tag_url[0]))
-        # Don't accept tags which predate repo
-        minRev = sys.maxsize
-        if (len(gitRevs) > 0):
-            minRev = min(gitRevs)
-        # End if
-        svnRevs = [ x.revNum() for x in svnLog ]
-        temp = min(svnRevs)
-        if (temp < minRev):
-            minRev = temp
-        # End if
-        # Find all the tags
-        svnTags = svnList(tag_url[0])
-        if (svnTags is not None):
-            for tag in svnTags:
-                # Set the correct URL for the repo
-                tag_url = os.path.join(tag_url[0], tag)
-                if (len(subdir) > 0):
-                    tag_url = os.path.join(tag_url, subdir[0])
-                # End if
-                tagRev = svnLastChangedRev(tag_url)
-                logs = svnCaptureLog(tag_url, tagRev, auth_table, svn_author, preserve_dates, tag=tag, default_author=default_author)
-                log = logs[0]
-                temp = log.revNum()
-                if temp < minRev:
-                    print("Skipping tag revision {}, before repo start".format(temp))
-                elif temp in gitRevs:
-                    print("Skipping tag revision {}, already in git repo".format(temp))
-                elif (temp in svnRevs):
-                    print("Skipping tag revision {}, already scheduled".format(temp))
-                else:
-                    svnLog.append(log)
-                # End if
-                # XXgoldyXX: Check file size (os.path.getsize())
-            # End for
-        # End if
-    # End if
 
     # Sort the requested svn revisions
     logs = sorted(svnLog, key = lambda x: x.revNum())
