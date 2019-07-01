@@ -385,7 +385,10 @@ def svnCaptureLog(repoURL, revstr, auth_table, svn_auth, keep_dates, tag=None, d
     lines = []
     skip = False
     if (log is not None):
-        for line in log.splitlines():
+        line_cnt = 0                 #initalize counter
+        log_lines = log.splitlines() #create list of log lines
+        for line in log_lines:
+            line_cnt = line_cnt + 1 #add one to counter
             match = reRevis.match(line)
             if ((not skip) and (nlines > 0)):
                 lines.append(line)
@@ -394,20 +397,10 @@ def svnCaptureLog(repoURL, revstr, auth_table, svn_auth, keep_dates, tag=None, d
                     #Does tag list exist?
                     #---------------------
                     if tag_rev_list is not None:
-                        #The revision tag is always one ahead of trunk/branch
-                        #       revision, so one should be added to the revision during search.
-                        rev_p1 = str(int(rev)+1)
+                        #If so, then search for tag nearest to revision:
+                        rev_idx = tag_rev_search(rev, rev_next, tag_rev_list)
 
-                        #If so, try searching for revision in tag revision list:
-                        try:
-                        #Note:  The revision tag is always one ahead of trunk/branch
-                        #       revision, so one should be added to the revision during search.
-                            rev_idx = tag_rev_list.index(rev_p1)
-                        except ValueError:
-                            #If not found, then just set rev_idx to -1:
-                            rev_idx = -1
-
-                        #Does revision exist in list?
+                        #Does a tag revision match current revision?
                         if rev_idx != -1:
                             #If so, then set tag string:
                             tag_str = tag_str_list[rev_idx]
@@ -426,6 +419,16 @@ def svnCaptureLog(repoURL, revstr, auth_table, svn_auth, keep_dates, tag=None, d
             elif (match is not None):
                 rev = match.group(1).strip()
                 who = match.group(2).strip()
+                #Look ahead for next revision:
+                #----------------------------
+                if line_cnt < len(log_lines)-1:
+                    #If not at end of log, search ahead:
+                    rev_next = next_revision_val(log_lines[line_cnt:])
+                else:
+                    #If at end of log, set next revision to gigantic number:
+                    rev_next = sys.maxsize
+                #----------------------------
+ 
                 if auth_table is not None:
                     if who in auth_table:
                         who = auth_table[who]
@@ -434,7 +437,26 @@ def svnCaptureLog(repoURL, revstr, auth_table, svn_auth, keep_dates, tag=None, d
                         auth_table[who] = default_author
                         who = default_author
                     else:
-                        print("WARNING: Author, '{}', not found in author table".format(who))
+                        print("WARNING: Author, '{}', not found in author table, guessing author info".format(who))
+
+                        #Is svn author an email? Search for "@" to find out:
+                        #--------------------------------------------------
+                        at_idx = who.find("@")
+
+                        if at_idx != -1:
+                            #If an email, set start of email as "name":
+                            who_name  = who[:at_idx]
+                            who_new   = "{} : <{}>".format(who_name,who)
+
+                            #re-name variable:
+                            who = who_new
+                        else:
+                            #If not an email, add a fake one to keep git happy:
+                            who_new = "{} : <missing_email@missing.email>".format(who)
+
+                            #re-name variable:
+                            who = who_new
+                        #--------------------------------------------------
                 elif not svn_auth:
                     who = None
                 # No else, just keep svn who
@@ -477,6 +499,63 @@ def parseAuthorTable(filename):
 
     return auth_table
 # End parseAuthorTable
+
+def tag_rev_search(rev, rev_next, tag_rev_list):
+    """This function is designed to search for the tag
+      revision closest to, but after, the current trunk
+      or branch revision, while also checking that no revisions
+      are between the current revision and the tag revision"""
+
+    #Convert tag revisions to integers:
+    tag_rev_ints = map(int,tag_rev_list)
+
+    #Convert current revision to integer
+    curr_rev_int = int(rev)
+
+    #Convert next revision to integer:
+    rev_next_int = int(rev_next)
+
+    #Ignore all tag revisions less than current revision:
+    tag_abv_list = [rev for rev in tag_rev_ints if rev >= curr_rev_int]
+
+    #Find revision closest to current revision:
+    tag_rev_close = min(tag_abv_list, key=lambda x: x-curr_rev_int)
+
+    #Determine if closest tag revision is in-between current revision and
+    #next trunk/branch revision:
+    if tag_rev_close < rev_next_int:
+        #If so, then find list index of tag:
+        rev_idx = tag_rev_ints.index(tag_rev_close)
+    else:
+        #If not, then set rev_idx to "-1", which indicates tag doesn't exist for this revision:
+        rev_idx = -1
+
+    #return tag revision index:
+    return rev_idx
+
+def next_revision_val(log_lines):
+    """This function searches for the next revision
+       in the subversion logs inside a loop of the
+       logs themselves, which is needed to assign
+       tags properly."""
+
+    #Initalize next revision:
+    rev_next = sys.maxsize
+
+    #Loop over log lines:
+    for line in log_lines:
+
+        #Search for match:
+        match = reRevis.match(line)
+
+        if match is not None:
+            #If match is present, pull out revision
+            rev_next = match.group(1).strip()
+            #break out of loop:
+            break
+
+    #Send next revision back:
+    return rev_next
 
 ##############################
 ###
@@ -1472,7 +1551,7 @@ def _main_func():
             # End if
         # End for
     # End for
-
+    
     # Sort the requested svn revisions
     logs = sorted(svnLog, key = lambda x: x.revNum())
 
