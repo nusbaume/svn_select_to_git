@@ -1,0 +1,48 @@
+How to add a CAM subversion branch to the git repository:
+
+1.  Determine the URL of the subversion repository for your branch, such as:
+
+    https://svn-ccsm-models.cgd.ucar.edu/cam1/branches/<branch_name>
+
+2.  Determine how many revisions to include, this can be done by typing the subversion command:
+
+    svn log https://svn-ccsm-models.cgd.ucar.edu/cam1/branches/<branch_name>
+
+    and finding how many revisions back you would like to bring forward to git.  Then record the revision number
+    of the furthest back revision you want to keep, which is stored as "rXXXX" on the top left of each log entry
+    (don't include the "r" itself). This will be labeled in the commands below as "base_revision".  Next, 
+    determine the revision number of your branch head by typing the subversion command:
+
+    svn info https://svn-ccsm-models.cgd.ucar.edu/cam1/branches/<branch_name>
+
+    and saving the number labeled "Revision".  This will be labeled in the commands below as "head_revision".
+
+3.  Record all authors who commited changes to the subversion branch.  This can be done by modifiying the file:
+
+    CAM_name_table.txt
+
+    With the text to the left of the colon the name as included in the subversion log (e.g. svn log), and the text
+    to the right the name and email as will be shown in the new git log.  Please note that the subversion name may
+    be just an ID, or a full email address, so it is worth checking (as the conversion will fail if these are mis-labeled).
+
+4.  Clone the CAM git repository.  This can be done via the command:
+
+    git clone <DONT KNOW GIT URL PATH YET!>/<git_repo_name>
+
+5.  Convert your subversion branch to a git branch via the command:
+
+    ./svn_select_to_git.py --author-table CAM_name_table.txt --branch <branch_name> --rev <base_revision>:<head_revision> \
+                           <svn_local_name> <git_repo_name> https://svn-ccsm-models.cgd.ucar.edu/cam1/branches/<branch_name>
+
+    Where "svn_local_name" is the name of the directory that the script will create to store a local copy of your branch in.
+
+6.  Once finished, go to the git repo directory (which now should be set to your newly created branch) and do any manual checking/testing that is required,
+    like running the simulation once to make sure it works.  Once everything is ok, push your branch to the main github repository using the command:
+
+    git push  (NOTE:  HAVEN'T ACTUALLY DONE THIS YET, AS THERE IS NOTHING TO PUSH TO!).
+
+    while inside the local git directory.  Congratulations!  Your branch is now on github.
+
+7.  If you have any problems, issues, or concerns, please feel free to send an email to Jesse Nusbaumer (nusbaume@ucar.edu). 
+
+Good luck!

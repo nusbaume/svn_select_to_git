@@ -15,6 +15,7 @@ katec@ucar.edu : Kate Thayer-Calder <katec@ucar.edu>
 mirin : Art Mirin <noemail>
 mvertens : Mariana Vertenstein <mvertens@ucar.edu>
 mvr : Mathew Rothstein <mvr@ucar.edu>
+nusbaume@colorado.edu : Jesse Nusbaumer <nusbaume@ucar.edu>
 olson : Jerry Olson <olson@ucar.edu>
 pworley : Pat Worley <worleyph@gmail.com>,
 santos@ucar.edu : Sean Patrick Santos <spsantos@uw.edu>
