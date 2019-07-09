@@ -15,6 +15,9 @@ import filecmp
 thisFile = os.path.realpath(inspect.getfile(inspect.currentframe()))
 currDir = os.path.dirname(thisFile)
 
+## Boilerplate files
+cam_copy_files = [".config_files.xml", ".gitignore"]
+
 ## Regular expression for source files
 cby_str="Committed by"
 reRevis = re.compile(r"^r(\d+)\s+\|\s+([^|]+)\|\s+([^|]+)\|\s+(\d+)\s+lines?$")
@@ -134,6 +137,161 @@ def file_diff(file1, file2):
     diff = diff or (not filecmp.cmp(file1, file2, shallow=False))
     return diff
 # End def file_diff
+
+def file_sub_text(filename, patterns):
+    """Search <filename> for a regular expression match in a key of dict,
+    <patterns>, and substitute the key's value.
+    """
+    # First, make a backup copy of <filename>
+    bkup_name = filename + '.fstbk'
+    if os.path.exists(bkup_name):
+        os.remove(bkup_name)
+    # End if
+    mode = os.stat(filename).st_mode
+    os.rename(filename, bkup_name)
+    # Try the substitution, restore backup on error
+    try:
+        with open(bkup_name, 'r') as infile:
+            src_lines = infile.readlines()
+        # End with
+        search_res = patterns.keys()
+        lines_to_skip = 0
+        with open(filename, 'w') as outfile:
+            for inline in src_lines:
+                if lines_to_skip > 0:
+                    lines_to_skip -= 1
+                else:
+                    for key in search_res:
+                        add_lines = key[0] == '+'
+                        if add_lines:
+                            # Special case, add new line(s)
+                            srch = key[1:]
+                        else:
+                            srch = key
+                        # End if
+                        match = re.search(srch, inline)
+                        if match is not None:
+                            repl = patterns[key]
+                            if isinstance(repl, str):
+                                # We have a match, do the substitution
+                                if add_lines:
+                                    outline = inline + repl
+                                else:
+                                    outline = re.sub(srch, repl, inline)
+                                # End if
+                            elif isinstance(repl, int):
+                                # Just delete this line and n-1 more
+                                lines_to_skip = repl - 1
+                                outline = None
+                            elif isinstance(repl, tuple):
+                                # This should be a substitution plus a
+                                # number of lines to ignore *after* this one
+                                if add_lines:
+                                    outline = inline + repl[0]
+                                else:
+                                    outline = re.sub(srch, repl[0], inline)
+                                # End if
+                                lines_to_skip = repl[1]
+                            else:
+                                outline = None # i.e., delete line
+                            # End if
+                            break
+                        else:
+                            outline = inline
+                        # End if
+                    # End for
+                    if outline is not None:
+                        outfile.write(outline)
+                    # End if (else just omit line)
+                # End if
+            # End for
+        # End with
+        # Cleanup
+        os.chmod(filename, mode)
+        if os.path.exists(bkup_name):
+            os.remove(bkup_name)
+        # End if
+    except Exception as e:
+        print ('ERROR: {}\nAborting'.format(e))
+        if os.path.exists(filename):
+            os.remove(filename)
+        # End if
+        os.rename(bkup_name, filename)
+        raise e
+    # End try
+
+def cam_svn_to_git_mods():
+    cconfig = os.path.join(os.getcwd(), 'cime_config')
+    bld = os.path.join(os.getcwd(), 'bld')
+    # buildnml
+    filename = os.path.join(cconfig, 'buildnml')
+    patterns = {'"components", ?"cam",' : '',
+                '+case.get_value\("RUN_REFTOD"\)' :
+                '\n    testsrc = os.path.join(srcroot, "components", "cam")'
+                '\n    if os.path.exists(testsrc):'
+                '\n        srcroot = testsrc\n'}
+    file_sub_text(filename, patterns)
+    # buildlib
+    filename = os.path.join(cconfig, 'buildlib')
+    patterns = {('cmd = os.path.join\(os.path.join\(srcroot, '
+                 '"components", "cam",') :
+                ('testpath = os.path.join(srcroot, "components", "cam")'
+                 '\n        if os.path.exists(testpath):'
+                 '\n            srcroot = testpath\n'
+                 '\n        cmd = os.path.join(os.path.join(srcroot,')}
+    file_sub_text(filename, patterns)
+    # buildcpp
+    filename = os.path.join(cconfig, 'buildcpp')
+    patterns = {'"components", "cam", ' : ''}
+    file_sub_text(filename, patterns)
+    # config_files/definition.xml
+    filename = os.path.join(bld, 'config_files', 'definition.xml')
+    patterns = {'Root directory of CAM source distribution' :
+                ('Root directory of CAM source distribution'
+                '\n</entry>\n<entry id="cam_dir" value="">'
+                 '\nRoot directory of CAM model source.')}
+    file_sub_text(filename, patterns)
+    # configure
+    filename = os.path.join(bld, 'configure')
+    patterns = {'Building from within ccsm scripts[?]' :
+                'Always build from within cesm (CIME) scripts',
+                'my \$cam_build = 1;' : ('my $cam_build = 0;', 3),
+                "my \$ccsm_seq = \(defined \$opts{'ccsm_seq'}\) \? 1 : 0;" :
+                'my $ccsm_seq = 1;',
+                'my \$cam_root = absolute_path\("\$cfgdir/../../.."\);' :
+                (('# Check for standalone or CESM checkout\n'
+                  'my $cam_root = absolute_path("$cfgdir/..");'
+                  '\nmy $cam_dir = $cam_root;'
+                  '\nif (! -d "$cam_root/cime") {'
+                  '\n  $cam_root = absolute_path("$cfgdir/../../..");'
+                  '\n}'
+                  '\nif (-d "$cam_root/components/cam/src") {'
+                  "\n    $cfg_ref->set('cam_root', $cam_root);"
+                  '\n    $cam_dir = "$cam_root/components/cam";'
+                  "\n    $cfg_ref->set('cam_dir', $cam_dir);"
+                  '\n}\nelsif (-d "$cam_root/src") {'
+                  "\n    $cfg_ref->set('cam_root', $cam_root);"
+                  "\n    $cfg_ref->set('cam_dir', $cam_dir);"), 1),
+                'contain the subdirectory components/cam/src/.' :
+                ('contain the subdirectory components/cam/src/'
+                 '\n** (CESM checkout) or the subdirectory src '
+                 '(standalone checkout).'),
+                ('\*\* It is derived from "config_dir/../../.." '
+                 'where config_dir is the') :
+                ('** For CESM checkouts, it is derived from '
+                 '"config_dir/../../..".'
+                 '\n** For CAM standalone checkouts, it is derived from'
+                 '"config_dir/..",'),
+                ('\*\* directory in the CAM distribution that contains '
+                 'the configuration') :
+                ('** where config_dir is the directory in the CAM '
+                 'distribution that\n** contains the configuration scripts.'),
+                'if \(-d "\$cam_root/components/cam/src"\) {' : 2,
+                '\$cam_root/components/cam/src/' : '$cam_dir/src/',
+                'my \$camsrcdir = "\$cam_root/components";' :
+                "my $camsrcdir = $cfg_ref->get('cam_dir');",
+                '\$camsrcdir/cam' : '$camsrcdir'}
+    file_sub_text(filename, patterns)
 
 ##############################
 ###
@@ -345,19 +503,19 @@ def svnExport(exportDir, repoURL, revstr=None):
     quitOnFail(retcode, caller)
 # End def svnExport
 
-def svnList(url):
+def svn_list(url):
     """Call svn list on a  url"""
-    caller = "svnList {}".format(url)
+    caller = "svn_list {}".format(url)
     slist = checkOutput(["svn", "list", url])
     entries = []
-    if (slist is not None):
+    if slist is not None:
         for line in slist.splitlines():
             entries.append(line.rstrip("/"))
         # End for
     # End if
 
     return entries
-# End def svnList
+# End def svn_list
 
 def svnLastChangedRev(url):
     """Find the last commit to url"""
@@ -376,24 +534,28 @@ def svnLastChangedRev(url):
     return rev
 # End def svnLastChangedRev
 
-def svnCaptureLog(repoURL, revstr, auth_table, svn_auth, keep_dates, tag=None, default_author=None, \
-                  tag_rev_list=None, tag_str_list=None):
+def svn_capture_log(repo_url, revstr, auth_table, svn_auth, keep_dates,
+                    tag=None, default_author=None,
+                    tag_rev_list=None, tag_str_list=None):
     logs = []
-    caller = "svnCaptureLog {} {}".format(repoURL, revstr)
-    log = checkOutput(["svn", "log", "--stop-on-copy", "-r{}".format(revstr), repoURL])
+    caller = "svn_capture_log {} {}".format(repo_url, revstr)
+    log = checkOutput(["svn", "log", "--stop-on-copy",
+                       "-r{}".format(revstr), repo_url])
     nlines = 0
     lines = []
     skip = False
-    if (log is not None):
+    if log is None:
+        perr("ERROR: '{}', no log".format(caller))
+    else:
         line_cnt = 0                 #initalize counter
         log_lines = log.splitlines() #create list of log lines
         for line in log_lines:
-            line_cnt = line_cnt + 1 #add one to counter
+            line_cnt += 1
             match = reRevis.match(line)
-            if ((not skip) and (nlines > 0)):
+            if (not skip) and (nlines > 0):
                 lines.append(line)
-                nlines = nlines - 1
-                if (nlines == 0):
+                nlines -= 1
+                if nlines == 0:
                     #Does tag list exist?
                     #---------------------
                     if tag_rev_list is not None:
@@ -412,11 +574,12 @@ def svnCaptureLog(repoURL, revstr, auth_table, svn_auth, keep_dates, tag=None, d
                         tag_str = None
                     #---------------------
 
-                    logs.append(SvnLogEntry(rev, who, when, repoURL, lines, tag=tag_str))
+                    logs.append(SvnLogEntry(rev, who, when, repo_url,
+                                            lines, tag=tag_str))
                     del(lines[:])
                     lines = []
                 # End if
-            elif (match is not None):
+            elif match is not None:
                 rev = match.group(1).strip()
                 who = match.group(2).strip()
                 #Look ahead for next revision:
@@ -428,16 +591,20 @@ def svnCaptureLog(repoURL, revstr, auth_table, svn_auth, keep_dates, tag=None, d
                     #If at end of log, set next revision to gigantic number:
                     rev_next = sys.maxsize
                 #----------------------------
- 
+
                 if auth_table is not None:
                     if who in auth_table:
                         who = auth_table[who]
                     elif default_author is not None:
-                        print("WARNING: Author, '{}', not found in author table, substituting '{}'".format(who,default_author))
+                        wmsg = ("WARNING: Author, '{}', not found in author "
+                                "table, substituting '{}'")
+                        print(wmsg.format(who, default_author))
                         auth_table[who] = default_author
                         who = default_author
                     else:
-                        print("WARNING: Author, '{}', not found in author table, guessing author info".format(who))
+                        wmsg = ("WARNING: Author, '{}', not found in author "
+                                "table, guessing author info")
+                        print(wmsg.format(who))
 
                         #Is svn author an email? Search for "@" to find out:
                         #--------------------------------------------------
@@ -452,7 +619,8 @@ def svnCaptureLog(repoURL, revstr, auth_table, svn_auth, keep_dates, tag=None, d
                             who = who_new
                         else:
                             #If not an email, add a fake one to keep git happy:
-                            who_new = "{} : <missing_email@missing.email>".format(who)
+                            wmsg = "{} : <missing_email@missing.email>"
+                            who_new = wmsg.format(who)
 
                             #re-name variable:
                             who = who_new
@@ -475,7 +643,7 @@ def svnCaptureLog(repoURL, revstr, auth_table, svn_auth, keep_dates, tag=None, d
         # End for
     # End if
     return logs
-# End def svnCaptureLog
+# End def svn_capture_log
 
 def parseAuthorTable(filename):
     if not os.path.exists(filename):
@@ -489,9 +657,11 @@ def parseAuthorTable(filename):
                 if len(entry) == 2:
                     auth_table[entry[0].strip()] = entry[1].strip()
                 elif len(entry) != 1:
-                    raise ValueError("Bad author table entry, '{}'".format(line))
+                    errmsg = "Bad author table entry, '{}'"
+                    raise ValueError(errmsg.format(line))
                 else:
-                    print("Ignoring incorrectly formatted author entry, '{}'".format(line.strip()))
+                    wmsg = "Ignoring incorrectly formatted author entry, '{}'"
+                    print(wmsg.format(line.strip()))
     except ValueError as e:
         perr(e)
     except Exception as e:
@@ -760,7 +930,7 @@ def gitCommitAll(repo, message, author=None, date=None):
     if date is not None:
         gitcmd.append("--date='{}'".format(date))
 
-    #Need to add quotes to message string, to 
+    #Need to add quotes to message string, to
     #avoid git error when "/" is present in the message:
     full_message = "'"+message+"'"
     gitcmd.append("--message={}".format(full_message))
@@ -835,12 +1005,13 @@ def findParentCommit(gitLog, svnRev):
   return commit
 # End def findParentCommit
 
-def gitSetupDir(chkdir, repo, branch, rev, repoURL, auth_table, svn_author, preserve_dates, default_author):
+def git_setup_dir(chkdir, repo, branch, rev, repo_url, auth_table,
+                  svn_author, preserve_dates, default_author):
     """
     Check to see if directory (chkdir) exists and is okay to use
     Create chkdir (if necessary) and set current branch to master
     returns True unless directory exists but is not correct"""
-    caller = "gitSetupDir {}".format(chkdir)
+    caller = "git_setup_dir {}".format(chkdir)
     dirOK = True
     currdir = os.getcwd()
     if (branch != "master"):
@@ -859,7 +1030,9 @@ def gitSetupDir(chkdir, repo, branch, rev, repoURL, auth_table, svn_author, pres
                     logs = list()
                     revstart = rev.revStart()
                     while len(logs) < 1:
-                        logs = svnCaptureLog(repoURL, revstart, auth_table, svn_author, preserve_dates, default_author=default_author)
+                        logs = svn_capture_log(repo_url, revstart, auth_table,
+                                               svn_author, preserve_dates,
+                                               default_author=default_author)
                         if len(logs) < 1:
                             revstart = revstart + 1
                             if revstart > rev.revEnd():
@@ -910,7 +1083,7 @@ def gitSetupDir(chkdir, repo, branch, rev, repoURL, auth_table, svn_author, pres
 
     os.chdir(currdir)
     return dirOK
-# End def gitSetupDir
+# End def git_setup_dir
 
 ##############################
 ###
@@ -927,7 +1100,7 @@ def FindTreeOrphans(dir1, dir2):
   for root, dirs, files in os.walk("."):
     if (root[0:len(groot)] != groot):
       for file in files:
-        fname = os.path.join(root, file).lstrip("./")
+        fname = os.path.join(root, file).lstrip(".").lstrip("/")
         if (not os.path.exists(os.path.join(dir2, fname))):
           orphans.append(fname)
         # End if
@@ -962,7 +1135,7 @@ def copySvn2Git(svnDir, gitDir):
                     continue
                 # End if
             # End if
-            num_copies = num_copies + 1
+            num_copies += 1
             shutil.copy2(file1, file2)
             # End if
         # End if
@@ -972,68 +1145,90 @@ def copySvn2Git(svnDir, gitDir):
   return num_copies
 # End def copySvn2Git
 
-def processRevision(exportDir, gitDir, log, external, cam_move):
-  rnum = log.revision()
-  tag = log.tag()
-  num_changes = 0
-  print("Processing revision {}, tag = {}".format(int(rnum), tag))
-  svnExport(exportDir, log.url(), rnum)
+def processRevision(export_dir, git_dir, log, external, cam_move):
+    rnum = log.revision()
+    tag = log.tag()
+    num_changes = 0
+    print("Processing revision {}, tag = {}".format(int(rnum), tag))
+    svnExport(export_dir, log.url(), rnum)
 
-  #-----------------------------
-  #Create Externals_CAM.cfg file
-  #-----------------------------
-  if external:
-      #Determine CAM SVN Externals:
-      svn_ext_list = read_svn_externals_cam(exportDir)
+    #-----------------------------
+    #Create Externals_CAM.cfg file
+    #-----------------------------
+    if external:
+        #Determine CAM SVN Externals:
+        cam_ext_path, cam_ext_url = read_svn_externals_cam(export_dir)
 
-      #Create new 'manage_externals' cfg file for CAM:
-      external_cam_cfg_create(svn_ext_list)
+        #Create new 'manage_externals' cfg file for CAM:
+        external_cam_cfg_create(cam_ext_path, cam_ext_url)
+    # End if
 
-  #-----------------------------------------
-  #Move "components/cam" to head of svn repo
-  #-----------------------------------------
-  if cam_move:
-      svn_cam_dir_top_move(exportDir)
-  #-----------------------------------------
+    #-----------------------------------------
+    #Move "components/cam" to head of svn repo
+    #-----------------------------------------
+    if cam_move:
+        svn_cam_dir_top_move(export_dir)
+    # End if
+    #-----------------------------------------
 
-  orphans1 = FindTreeOrphans(exportDir, gitDir)
-  orphans2 = FindTreeOrphans(gitDir, exportDir)
-  # Remove files no longer in repo
-  for file in orphans2:
-    gitRmFile(gitDir, file)
-    num_changes = num_changes + 1
-  # End for
-  # Copy the svn export directory into the working git directory
-  # Can't use copytree since the repo directory already exists
-  num_changes = num_changes + copySvn2Git(exportDir, gitDir)
-  # Add files new to the repo
-  for file in orphans1:
-    gitAddFile(gitDir, file)
-    num_changes = num_changes + 1
-  # End for
-  # Commit everything
+    orphans1 = FindTreeOrphans(export_dir, git_dir)
+    orphans2 = FindTreeOrphans(git_dir, export_dir)
+    # Remove files no longer in repo
+    for file in orphans2:
+        if file not in cam_copy_files:
+            gitRmFile(git_dir, file)
+            num_changes += 1
+        # End if
+    # End for
+    # Copy the svn export directory into the working git directory
+    # Can't use copytree since the repo directory already exists
+    num_changes += copySvn2Git(export_dir, git_dir)
+    # Add files new to the repo
+    for file in orphans1:
+        gitAddFile(git_dir, file)
+        num_changes += 1
+    # End for
 
-  #--------------------------------------
-  #Add Externals_CAM.cfg file to git repo
-  #--------------------------------------
-  if external:
-      #Modify top-level "Externals.cfg" to read-in CAM cfg file:
-      external_cfg_add_cam(gitDir)
+    #--------------------------------------
+    #Add Externals_CAM.cfg file to git repo
+    #--------------------------------------
+    if external:
+        #Modify top-level "Externals.cfg" to read-in CAM cfg file:
+        external_cfg_add_cam(git_dir)
 
-      #Add new cfg files to git repository:
-      git_external_cfg_cam_add(gitDir, False, "")
+        #Add new cfg files to git repository:
+        git_external_cfg_cam_add(git_dir, False, "")
 
-      #Add "manage_externals" remote to git repository:
-      git_manage_external_add(gitDir)
-  #---------------------------------------------
+        #Add "manage_externals" remote to git repository:
+        git_manage_external_add(git_dir)
+    # End if
+    #---------------------------------------------
 
-  if num_changes > 0:
-    gitCommitAll(gitDir, log.formatLogMessage(), author=log.who(), date=log.when())
-  # End if
-  if (tag is not None):
-    # Apply the tag
-    gitApplyTag(gitDir, tag, log.formatLogMessage())
-  # End if
+    #--------------------------------------
+    # Add boilerplate files
+    #--------------------------------------
+    for file in cam_copy_files:
+        src_path = os.path.join(currDir, "cam{}".format(file))
+        dst_path = os.path.join(git_dir, file)
+        needs_add = not os.path.exists(dst_path)
+        if file_diff(src_path, dst_path):
+            shutil.copy2(src_path, dst_path)
+            num_changes += 1
+        # End if
+        if needs_add:
+            gitAddFile(git_dir, dst_path)
+        # End if
+    # End for
+
+    # Commit everything
+    if num_changes > 0:
+        gitCommitAll(git_dir, log.formatLogMessage(),
+                     author=log.who(), date=log.when())
+    # End if
+    if (tag is not None):
+        # Apply the tag
+        gitApplyTag(git_dir, tag, log.formatLogMessage())
+    # End if
 # End def processRevision
 
 ############################################
@@ -1054,14 +1249,15 @@ def read_svn_externals_cam(svndir):
        the SVN_EXTERNAL_DIRECTORIES file
        in the cam sub-directory."""
 
+    #Set CAM's 'SVN_EXTERNAL_DIRECTORIES' file path:
+    svn_ext_filepath = os.path.join(svndir,"components", "cam",
+                                    "SVN_EXTERNAL_DIRECTORIES")
+
     #Check if CAM's SVN_EXTERNAL_DIRECTORIES file exists, and is
     #where we think it is:
-    if not os.path.exists(os.path.join(svndir,"components","cam","SVN_EXTERNAL_DIRECTORIES")):
-        perr("CAM's SVN_EXTERNAL_DIRECTORIES is not present, need to \
-              add CAM externals to git manually")
-
-    #Set CAM's 'SVN_EXTERNAL_DIRECTORIES' file path:
-    svn_ext_filepath = os.path.join(svndir,"components","cam","SVN_EXTERNAL_DIRECTORIES")
+    if not os.path.exists(svn_ext_filepath):
+        perr("CAM's SVN_EXTERNAL_DIRECTORIES is not present, need to "
+             "add CAM externals to git manually")
 
     #initalize externals list:
     svn_ext_list = []
@@ -1088,19 +1284,15 @@ def read_svn_externals_cam(svndir):
         cam_ext_url.append(path_and_url[1].strip())
 
     #Return cam external paths (for deletion):
-    return [cam_ext_path,cam_ext_url]
+    return cam_ext_path, cam_ext_url
 
 #+++++++++++++++++++++++
 
-def external_cam_cfg_create(svn_ext_list):
+def external_cam_cfg_create(cam_ext_path, cam_ext_url):
     """Generates a new Externals_CAM.cfg
        file based off the original
        'SVN_EXTERNAL_DIRECTORIES' file in
        the 'components/cam' subdirectory."""
-
-    #Pull out individual lists:
-    cam_ext_path = svn_ext_list[0]
-    cam_ext_url  = svn_ext_list[1]
 
     #Iinitalize lists:
     ext_cfg_labels = []
@@ -1123,10 +1315,10 @@ def external_cam_cfg_create(svn_ext_list):
         #Search for "tags" line:
         tags_exist = line.find("tags")
 
-        #End script if "tags" string isn't found:    
+        #End script if "tags" string isn't found:
         if(tags_exist == -1):
             perr("The 'tags' string is missing in external URL {}".format(line))
-    
+
         #Determine repository URLs:
         #Note:  Adding five to index to incorporate entire "tags/" string in URL
         ext_cfg_urls.append(line[:(tags_exist+5)])
@@ -1139,7 +1331,7 @@ def external_cam_cfg_create(svn_ext_list):
     #----------------------------------
     #Set cfg file name:
     cfg_fil_name = "Externals_CAM.cfg"
-    
+
     #Determine local directory:
     currdir = os.getcwd()
 
@@ -1156,7 +1348,7 @@ def external_cam_cfg_create(svn_ext_list):
     with open(cfg_file_path,'w') as cfg_file:
 
         #Loop over external label indices:
-        for i in range(len(ext_cfg_labels)): 
+        for i in range(len(ext_cfg_labels)):
             #Add Externals label:
             cfg_file.write("["+ext_cfg_labels[i]+"]\n")
             #Add local path:
@@ -1184,7 +1376,7 @@ def external_cam_cfg_create(svn_ext_list):
 def external_cfg_add_cam(git_dir):
     """Adds a cam externals call to
        the top-level 'Externals.cfg'
-       directory.""" 
+       directory."""
 
     #Set cfg file name:
     cfg_fil_name = "Externals.cfg"
@@ -1227,17 +1419,17 @@ def git_external_cfg_cam_add(git_dir, git_commit, git_com_msg):
     cam_ext_full_path = os.path.join(currdir,cam_ext_file)
 
     #Go to new git (top-level) directory:
-    os.chdir(git_dir)   
+    os.chdir(git_dir)
 
     #Copy new Externals_CAM.cfg file to git repository:
-    retcode = retcall(["mv", cam_ext_full_path, "."])     
+    retcode = retcall(["mv", cam_ext_full_path, "."])
 
     #Add new Externals_CAM.cfg file to git:
     retcode = retcall(["git", "add", cam_ext_file])
 
     #Quit if git add fails:
     caller = "git add {} in {}".format(cam_ext_file, git_dir)
-    quitOnFail(retcode, caller) 
+    quitOnFail(retcode, caller)
 
     #Add new Externals.cfg file to git:
     retcode = retcall(["git", "add", head_ext_file])
@@ -1272,7 +1464,7 @@ def git_manage_external_add(git_dir):
     if not os.path.exists("manage_externals"):
         #Read in list of git remotes:
         remote_list = checkOutput(["git", "remote"])
-        
+
         #Search for "manage_externals" in list:
         manage_exist = remote_list.find("manage_externals")
 
@@ -1291,7 +1483,7 @@ def git_manage_external_add(git_dir):
 
             #Quit if git remote add fails:
             caller = "git remote add of manage_externals in {}".format(git_dir)
-            quitOnFail(retcode, caller)            
+            quitOnFail(retcode, caller)
 
             #Now add remote tree to repo:
             retcode = retcall(["git", "read-tree", "--prefix=manage_externals", \
@@ -1423,7 +1615,7 @@ def parse_arguments():
                                 in the same location.  If False, all of the cam files
                                 will be moved to the top-level of the local git repository.
                                 The default is False""")
-                                
+
 
     args = parser.parse_args()
     return args
@@ -1460,7 +1652,7 @@ def _main_func():
     git_dir = os.path.abspath(git_dir)
 
     #Script currently doesn't appear to work with Python version 3, so kill
-    #script with warning if python 3 or greater is being used: 
+    #script with warning if python 3 or greater is being used:
     if sys.version_info[0] >= 3:
         perr("Script only works with Python 2. Please switch python versions.")
 
@@ -1470,7 +1662,7 @@ def _main_func():
         auth_table = None
 
     # Create a master list of revision ranges to process
-    if (revisions is not None):
+    if revisions is not None:
         for revarg in revisions:
             rlist = revarg.split(",")
             for rev in rlist:
@@ -1498,7 +1690,8 @@ def _main_func():
     # End if
 
     # Make sure the git directory is ready to go
-    gitSetupDir(git_dir, repo_url, branch_name, revStart, repo_url, auth_table, svn_author, preserve_dates, default_author)
+    git_setup_dir(git_dir, repo_url, branch_name, revStart, repo_url,
+                  auth_table, svn_author, preserve_dates, default_author)
     # Collect all the old svn revision numbers
     gitLog = gitCaptureLog(git_dir)
     gitRevs = [ x.revNum() for x in gitLog ]
@@ -1508,15 +1701,15 @@ def _main_func():
     tag_str_list = list()
 
     # Determine the subversion revisions associated with each tag (if any):
-    if (len(tag_url) > 0):
+    if tag_url:
         print("Processing tags from {}".format(tag_url[0]))
         # Find all the tags:
-        svnTags = svnList(tag_url[0])
-        if (svnTags is not None):
+        svnTags = svn_list(tag_url[0])
+        if svnTags is not None:
             for tag in svnTags:
                 # Set the correct URL for the repo
                 tag_url_full = os.path.join(tag_url[0], tag)
-                if (len(subdir) > 0):
+                if subdir:
                     tag_url_full = os.path.join(tag_url_full, subdir[0])
                 # End if
                 #Dtermine revision associated with tag:
@@ -1524,36 +1717,45 @@ def _main_func():
                 #Add tag to lists:
                 tag_str_list.append(tag)
                 tag_rev_list.append(tagRev)
+            # End for
+        # End if
 
     # Capture all the revision log info
-    svnLog = list()
+    svn_log = list()
     for rev in revlist:
         #check if tag lists are non-empty:
         if tag_rev_list:
             # Capture the log messages for range, 'rev' with tag included:
-            logs = svnCaptureLog(repo_url, rev.revString(), auth_table, svn_author, preserve_dates, default_author=default_author, \
-                                 tag_rev_list=tag_rev_list, tag_str_list=tag_str_list)
+            logs = svn_capture_log(repo_url, rev.revString(), auth_table,
+                                   svn_author, preserve_dates,
+                                   default_author=default_author,
+                                   tag_rev_list=tag_rev_list,
+                                   tag_str_list=tag_str_list)
         else:
             # Capture the log messages for range, 'rev'
-            logs = svnCaptureLog(repo_url, rev.revString(), auth_table, svn_author, preserve_dates, default_author=default_author)
+            logs = svn_capture_log(repo_url, rev.revString(), auth_table,
+                                   svn_author, preserve_dates,
+                                   default_author=default_author)
         # End if
 
-        if (len(logs) > 0):
-            print("Adding {} revisions from {} to {}".format(len(logs), rev.revString(), branch_name))
+        if logs:
+            msg = "Adding {} revisions from {} to {}"
+            print(msg.format(len(logs), rev.revString(), branch_name))
         else:
             print("No revisions found for {}".format(rev.revString()))
         # End if
         for log in logs:
-            if (log.revNum() not in gitRevs):
-                svnLog.append(log)
+            if log.revNum() not in gitRevs:
+                svn_log.append(log)
             else:
-                print("Skipping revision {}, already in git repo".format(log.revNum()))
+                msg = "Skipping revision {}, already in git repo"
+                print(msg.format(log.revNum()))
             # End if
         # End for
     # End for
-    
+
     # Sort the requested svn revisions
-    logs = sorted(svnLog, key = lambda x: x.revNum())
+    logs = sorted(svn_log, key = lambda x: x.revNum())
 
     # Process the sorted log revisions
     for log in logs:
