@@ -220,9 +220,10 @@ def file_sub_text(filename, patterns):
         raise e
     # End try
 
-def cam_svn_to_git_mods():
-    cconfig = os.path.join(os.getcwd(), 'cime_config')
-    bld = os.path.join(os.getcwd(), 'bld')
+def cam_svn_to_git_mods(repo_dir):
+    num_changes = 0
+    cconfig = os.path.join(repo_dir, 'cime_config')
+    bld = os.path.join(repo_dir, 'bld')
     # buildnml
     filename = os.path.join(cconfig, 'buildnml')
     patterns = {'"components", ?"cam",' : '',
@@ -231,6 +232,7 @@ def cam_svn_to_git_mods():
                 '\n    if os.path.exists(testsrc):'
                 '\n        srcroot = testsrc\n'}
     file_sub_text(filename, patterns)
+    num_changes += 1
     # buildlib
     filename = os.path.join(cconfig, 'buildlib')
     patterns = {('cmd = os.path.join\(os.path.join\(srcroot, '
@@ -244,6 +246,7 @@ def cam_svn_to_git_mods():
     filename = os.path.join(cconfig, 'buildcpp')
     patterns = {'"components", "cam", ' : ''}
     file_sub_text(filename, patterns)
+    num_changes += 1
     # config_files/definition.xml
     filename = os.path.join(bld, 'config_files', 'definition.xml')
     patterns = {'Root directory of CAM source distribution' :
@@ -251,6 +254,7 @@ def cam_svn_to_git_mods():
                 '\n</entry>\n<entry id="cam_dir" value="">'
                  '\nRoot directory of CAM model source.')}
     file_sub_text(filename, patterns)
+    num_changes += 1
     # configure
     filename = os.path.join(bld, 'configure')
     patterns = {'Building from within ccsm scripts[?]' :
@@ -292,6 +296,8 @@ def cam_svn_to_git_mods():
                 "my $camsrcdir = $cfg_ref->get('cam_dir');",
                 '\$camsrcdir/cam' : '$camsrcdir'}
     file_sub_text(filename, patterns)
+    num_changes += 1
+    return num_changes
 
 ##############################
 ###
@@ -1219,6 +1225,11 @@ def processRevision(export_dir, git_dir, log, external, cam_move):
             gitAddFile(git_dir, dst_path)
         # End if
     # End for
+
+    #--------------------------------------
+    # Modify build scripts
+    #--------------------------------------
+    num_changes += cam_svn_to_git_mods(git_dir)
 
     # Commit everything
     if num_changes > 0:

@@ -50,7 +50,7 @@ doerr() {
 cd ${scratch}
 svndir="${scratch}/cam_svn"
 gitdir="${scratch}/cam_git"
-#rm -rf ${svndir} ${gitdir}
+rm -rf ${svndir} ${gitdir}
 fixargs="--author-table ${name_table}"
 # First, setup the trunk
 args="${fixargs} --tags ${ttags} --rev ${trunk_commits}"
