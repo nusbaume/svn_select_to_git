@@ -244,7 +244,11 @@ def cam_svn_to_git_mods(repo_dir):
     file_sub_text(filename, patterns)
     # buildcpp
     filename = os.path.join(cconfig, 'buildcpp')
-    patterns = {'"components", "cam", ' : ''}
+    patterns = {'cmd = os.path.join\(srcroot, "components", "cam", "bld", "configure"\) \+ \\\\' :
+               ('testpath = os.path.join(srcroot, "components", "cam")'
+                '\n    if os.path.exists(testpath):'
+                '\n        srcroot = testpath\n'
+                r'    cmd = os.path.join(srcroot, "bld", "configure") + \\')}
     file_sub_text(filename, patterns)
     num_changes += 1
     # config_files/definition.xml
