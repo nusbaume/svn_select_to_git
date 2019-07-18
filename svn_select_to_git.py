@@ -224,6 +224,7 @@ def cam_svn_to_git_mods(repo_dir):
     num_changes = 0
     cconfig = os.path.join(repo_dir, 'cime_config')
     bld = os.path.join(repo_dir, 'bld')
+    systest = os.path.join(repo_dir, 'test', 'system')
     # buildnml
     filename = os.path.join(cconfig, 'buildnml')
     patterns = {'"components", ?"cam",' : '',
@@ -261,12 +262,7 @@ def cam_svn_to_git_mods(repo_dir):
     num_changes += 1
     # configure
     filename = os.path.join(bld, 'configure')
-    patterns = {'Building from within ccsm scripts[?]' :
-                'Always build from within cesm (CIME) scripts',
-                'my \$cam_build = 1;' : ('my $cam_build = 0;', 3),
-                "my \$ccsm_seq = \(defined \$opts{'ccsm_seq'}\) \? 1 : 0;" :
-                'my $ccsm_seq = 1;',
-                'my \$cam_root = absolute_path\("\$cfgdir/../../.."\);' :
+    patterns = {'my \$cam_root = absolute_path\("\$cfgdir/../../.."\);' :
                 (('# Check for standalone or CESM checkout\n'
                   'my $cam_root = absolute_path("$cfgdir/..");'
                   '\nmy $cam_dir = $cam_root;'
@@ -301,6 +297,242 @@ def cam_svn_to_git_mods(repo_dir):
                 '\$camsrcdir/cam' : '$camsrcdir'}
     file_sub_text(filename, patterns)
     num_changes += 1
+
+    #Regression test files:
+    #---------------------
+    #test_driver.sh
+    filename = os.path.join(systest, 'test_driver.sh')
+    patterns = {'root_dir=\"(\$\( dirname ){4}\$\{tdir\} (\)[ \"]){4}' :
+               ('trial_dir="$( dirname $( dirname $( dirname $( dirname ${tdir} ) ) ) )"\n'
+                '    if [ -d "${trial_dir}/cime/scripts" ]; then\n'
+                '      root_dir=$trial_dir\n'
+                '    else\n'
+                '      root_dir="$( dirname $( dirname ${tdir} ) )"\n'
+                '    fi\n'),
+
+                'export CAM_ROOT=\\\`cd \\\\\$\{CAM_SCRIPTDIR}(/\.\.){4} ; pwd \\\`' :
+               ('if [ -d \`${CAM_SCRIPTDIR}/../../components\` ]; then\n'
+                '        export CAM_ROOT=\`cd \${CAM_SCRIPTDIR}/../.. ; pwd \`\n'
+                '    else\n'
+                '        export CAM_ROOT=\`cd \${CAM_SCRIPTDIR}/../../../.. ; pwd \`\n'
+                '    fi'),
+
+                'echo \"ERROR: unable to determine script directory \"' :
+               ('if [ -n "\${CAM_ROOT}" ] && [ -f \${CAM_ROOT}/test/system/test_driver.sh ]; then\n'
+                '            export CAM_SCRIPTDIR=\`cd \${CAM_ROOT}/test/system; pwd \`\n'
+                '        else\n'
+                '            echo \"ERROR: unable to determine script directory \"'),
+
+                'echo \"       if initiating batch job from directory other than the one containing test_driver.sh, \"' :
+                '    echo "       if initiating batch job from directory other than the one containing test_driver.sh, "',
+
+                'echo \"       you must set the environment variable CAM_ROOT to the full path of directory containing \"' :
+                '    echo "       you must set the environment variable CAM_ROOT to the full path of directory containing "',
+
+                'echo \"       <components>. \"' :
+                '    echo "       <components>. "',
+
+                'exit 3' :
+               ('    exit 3\n'
+                '        fi')}
+    file_sub_text(filename, patterns)
+    num_changes += 1
+    #TBL.sh
+    filename = os.path.join(systest, 'TBL.sh') 
+    patterns = {'env CAM_TESTDIR=\$\{BL_TESTDIR\} \\\\' :
+               ('if [ -d "${BL_ROOT}/components/cam" ]; then\n'
+                '\n'
+                '            env CAM_TESTDIR=${BL_TESTDIR} \\\\'),
+
+                '\$\{BL_ROOT\}/components/cam/test/system/TSM.sh \$1 \$2 \$3$' :
+               ('${BL_ROOT}/components/cam/test/system/TSM.sh $1 $2 $3\n'
+                '\n'
+                '        else\n'
+                '\n'
+                '            env CAM_TESTDIR=${BL_TESTDIR} \\\n'
+                '            CAM_SCRIPTDIR=${BL_ROOT}/test/system \\\n'
+                '            ${BL_ROOT}/test/system/TSM.sh $1 $2 $3\n'
+                '\n'
+                '        fi'),
+
+                '\$\{BL_ROOT\}/components/cam/test/system/TSM.sh \$1 \$2 \$3 \$4$' :
+               ('${BL_ROOT}/components/cam/test/system/TSM.sh $1 $2 $3 $4\n'
+                '\n'
+                '        else\n'
+                '\n'
+                '            env CAM_TESTDIR=${BL_TESTDIR} \\\n'
+                '            CAM_SCRIPTDIR=${BL_ROOT}/test/system \\\n'
+                '            ${BL_ROOT}/test/system/TSM.sh $1 $2 $3 $4\n'
+                '\n'
+                '        fi')}
+    file_sub_text(filename, patterns)
+    num_changes += 1
+    #TBL_ccsm.sh
+    filename = os.path.join(systest, 'TBL_ccsm.sh')
+    patterns = {'env CAM_TESTDIR=\$\{BL_TESTDIR\} \\\\' :
+               ('if [ -d "${BL_ROOT}/components/cam" ]; then\n'
+                '\n'
+                '            env CAM_TESTDIR=${BL_TESTDIR} \\\\'),
+
+                '\$\{BL_ROOT\}/components/cam/test/system/TSM_ccsm.sh \$1 \$2 \$3$' :
+               ('${BL_ROOT}/components/cam/test/system/TSM_ccsm.sh $1 $2 $3\n'
+                '\n'
+                '        else\n'
+                '\n'
+                '            env CAM_TESTDIR=${BL_TESTDIR} \\\n'
+                '            CAM_SCRIPTDIR=${BL_ROOT}/test/system \\\n'
+                '            CAM_ROOT=${BL_ROOT} \\\n'
+                '            ${BL_ROOT}/test/system/TSM_ccsm.sh $1 $2 $3\n'
+                '\n'
+                '        fi'),
+
+                '\$\{BL_ROOT\}/components/cam/test/system/TSM_ccsm.sh \$1 \$2 \$3 \$4$' :
+               ('${BL_ROOT}/components/cam/test/system/TSM_ccsm.sh $1 $2 $3 $4\n'
+                '\n'
+                '        else\n'
+                '\n'
+                '            env CAM_TESTDIR=${BL_TESTDIR} \\\n'
+                '            CAM_SCRIPTDIR=${BL_ROOT}/test/system \\\n'
+                '            CAM_ROOT=${BL_ROOT} \\\n'
+                '            ${BL_ROOT}/test/system/TSM_ccsm.sh $1 $2 $3 $4\n'
+                '\n'
+                '        fi')}
+    file_sub_text(filename, patterns)
+    num_changes += 1
+    #TPF.sh
+    filename = os.path.join(systest, 'TPF.sh') 
+    patterns = {'env CAM_TESTDIR=\$\{BL_TESTDIR\} \\\\' :
+               ('if [ -d "${BL_ROOT}/components/cam" ]; then\n'
+                '\n'
+                '        env CAM_TESTDIR=${BL_TESTDIR} \\\\'),
+
+                '\$\{BL_ROOT\}/components/cam/test/system/TSM.sh \$1 \$2 \$3 \$4$' :
+               ('${BL_ROOT}/components/cam/test/system/TSM.sh $1 $2 $3 $4\n'
+                '\n'
+                '    else\n'
+                '\n'
+                '        env CAM_TESTDIR=${BL_TESTDIR} \\\n'
+                '        CAM_SCRIPTDIR=${BL_ROOT}/test/system \\\n'
+                '        ${BL_ROOT}/test/system/TSM.sh $1 $2 $3 $4\n'
+                '\n'
+                '    fi')}
+    file_sub_text(filename, patterns)
+    num_changes += 1
+    #TR8.sh
+    filename = os.path.join(systest, 'TR8.sh')
+    patterns = {'# Check physics' :
+               ('# Check physics\n'
+                'if [ -d "${CAM_ROOT}/components/cam" ]; then\n'),
+
+                '#Check Ionosphere' :
+               ('else\n'
+                '\n'
+                'ruby $ADDREALKIND_EXE -r r8 -l 1 -d $CAM_ROOT/src/physics/cam\n'
+                'rc=$?\n'
+                'ruby $ADDREALKIND_EXE -r r8 -l 1 -d $CAM_ROOT/src/physics/camrt\n'
+                'rc=`expr $? + $rc`\n'
+                'ruby $ADDREALKIND_EXE -r r8 -l 1 -d $CAM_ROOT/src/physics/rrtmg -s aer_src\n'
+                'rc=`expr $? + $rc`\n'
+                'ruby $ADDREALKIND_EXE -r r8 -l 1 -d $CAM_ROOT/src/physics/simple\n'
+                'rc=`expr $? + $rc`\n'
+                'ruby $ADDREALKIND_EXE -r r8 -l 1 -d $CAM_ROOT/src/physics/waccm\n'
+                'rc=`expr $? + $rc`\n'
+                'ruby $ADDREALKIND_EXE -r r8 -l 1 -d $CAM_ROOT/src/physics/waccmx\n'
+                'rc=`expr $? + $rc`\n'
+                '\n'
+                'fi\n'
+                '\n'
+                '#Check Ionosphere\n'
+                'if [ -d "${CAM_ROOT}/components/cam" ]; then\n'),
+
+                '#Check Chemistry' :
+               ('else\n'
+                '\n'
+                'ruby $ADDREALKIND_EXE -r r8 -l 1 -d $CAM_ROOT/src/ionosphere\n'
+                'rc=`expr $? + $rc`\n'
+                '\n'
+                'fi\n'
+                '\n'
+                '#Check Chemistry\n'
+                'if [ -d "${CAM_ROOT}/components/cam" ]; then\n'),
+                                '#Check Dynamics' :
+               ('else\n'
+                '\n'
+                'ruby $ADDREALKIND_EXE -r r8 -l 1 -d $CAM_ROOT/src/chemistry\n'
+                'rc=`expr $? + $rc`\n'
+                '\n'
+                'fi\n'
+                '\n'
+                '#Check Dynamics\n'
+                'if [ -d "${CAM_ROOT}/components/cam" ]; then\n'),
+
+                '#Check other' :
+               ('else\n'
+                '\n'
+                'ruby $ADDREALKIND_EXE -r r8 -l 1 -d $CAM_ROOT/src/dynamics/se\n'
+                'rc=`expr $? + $rc`\n'
+                'ruby $ADDREALKIND_EXE -r r8 -l 1 -d $CAM_ROOT/src/dynamics/fv\n'
+                'rc=`expr $? + $rc`\n'
+                'ruby $ADDREALKIND_EXE -r r8 -l 1 -d $CAM_ROOT/src/dynamics/eul\n'
+                'rc=`expr $? + $rc`\n'
+                '\n'
+                'fi\n'
+                '\n'
+                '#Check other\n'
+                'if [ -d "${CAM_ROOT}/components/cam" ]; then\n'),
+
+                '#Check coupler' :
+               ('else\n'
+                '\n'
+                'ruby $ADDREALKIND_EXE -r r8 -l 1 -d $CAM_ROOT/src/advection\n'
+                'rc=`expr $? + $rc`\n'
+                'ruby $ADDREALKIND_EXE -r r8 -l 1 -d $CAM_ROOT/src/control\n'
+                'rc=`expr $? + $rc`\n'
+                'ruby $ADDREALKIND_EXE -r r8 -l 1 -d $CAM_ROOT/src/utils\n'
+                'rc=`expr $? + $rc`\n'
+                '\n'
+                'fi\n'
+                '\n'
+                '#Check coupler\n'
+                'if [ -d "${CAM_ROOT}/components/cam" ]; then\n'),
+
+                'echo \$rc' : '',
+                                'if \[ \$rc = 255 \]; then' :
+               ('else\n'
+                '\n'
+                'ruby $ADDREALKIND_EXE -r r8 -l 1 -d $CAM_ROOT/src/cpl\n'
+                'rc=`expr $? + $rc`\n'
+                '\n'
+                'fi\n'
+                '\n'
+                'echo $rc\n'
+                '\n'
+                'if [ $rc = 255 ]; then'),
+
+                'exit \$rc' :
+               ('echo $rc\n'
+                'exit $rc')}
+    file_sub_text(filename, patterns)    
+    num_changes += 1
+    #Makefile.in
+    filename = os.path.join(bld, 'Makefile.in') 
+    patterns = {'\$\(ROOTDIR\)/components/cam/bld/mkDepends Filepath Srcfiles > \$@' :
+               ('if [ -d "${ROOTDIR}/components/cam" ]; then \\\n'
+                '           $(ROOTDIR)/components/cam/bld/mkDepends Filepath Srcfiles > $@; \\\n'
+                '        else \\\n'
+                '           $(ROOTDIR)/bld/mkDepends Filepath Srcfiles > $@; \\\n' 
+                '        fi' ),
+
+                '\$\(ROOTDIR\)/components/cam/bld/mkSrcfiles -e \$\(EXCLUDE_SOURCES\) > \$@' :
+               ('if [ -d "${ROOTDIR}/components/cam" ]; then \\\n'
+                '           $(ROOTDIR)/components/cam/bld/mkSrcfiles -e $(EXCLUDE_SOURCES) > $@; \\\n'
+                '        else \\\n'
+                '           $(ROOTDIR)/bld/mkSrcfiles -e $(EXCLUDE_SOURCES) > $@; \\\n'
+                '        fi')}
+    file_sub_text(filename, patterns)
+    num_changes += 1
+    #---------------------
+
     return num_changes
 
 ##############################
