@@ -311,14 +311,14 @@ def cam_svn_to_git_mods(repo_dir):
                 '    fi\n'),
 
                 'export CAM_ROOT=\\\`cd \\\\\$\{CAM_SCRIPTDIR}(/\.\.){4} ; pwd \\\`' :
-               ('if [ -d \`${CAM_SCRIPTDIR}/../../components\` ]; then\n'
+               ('if [ -d "\${CAM_SCRIPTDIR}/../../components" ]; then\n'
                 '        export CAM_ROOT=\`cd \${CAM_SCRIPTDIR}/../.. ; pwd \`\n'
                 '    else\n'
                 '        export CAM_ROOT=\`cd \${CAM_SCRIPTDIR}/../../../.. ; pwd \`\n'
                 '    fi'),
 
                 'echo \"ERROR: unable to determine script directory \"' :
-               ('if [ -n "\${CAM_ROOT}" ] && [ -f \${CAM_ROOT}/test/system/test_driver.sh ]; then\n'
+               ('if [ -n "\${CAM_ROOT}"  -a  -f "\${CAM_ROOT}/test/system/test_driver.sh" ]; then\n'
                 '            export CAM_SCRIPTDIR=\`cd \${CAM_ROOT}/test/system; pwd \`\n'
                 '        else\n'
                 '            echo \"ERROR: unable to determine script directory \"'),
