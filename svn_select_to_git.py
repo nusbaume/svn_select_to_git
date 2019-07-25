@@ -16,7 +16,7 @@ thisFile = os.path.realpath(inspect.getfile(inspect.currentframe()))
 currDir = os.path.dirname(thisFile)
 
 ## Boilerplate files
-cam_copy_files = [".config_files.xml", ".gitignore"]
+cam_copy_files = [".config_files.xml", ".gitignore", "TGIT.sh"]
 
 ## Regular expression for source files
 cby_str="Committed by"
@@ -514,6 +514,25 @@ def cam_svn_to_git_mods(repo_dir):
                 'exit $rc')}
     file_sub_text(filename, patterns)    
     num_changes += 1
+    #input_tests_master
+    filename = os.path.join(systest, 'input_tests_master')
+    patterns = {'fm001 TFM.sh' :
+               ('gt001 TGIT.sh\n'
+                'fm001 TFM.sh')}
+    file_sub_text(filename, patterns)
+    num_changes += 1
+    #tests_pretag_hobart_nag
+    filename = os.path.join(systest, 'tests_pretag_hobart_nag')
+    patterns = {'fm001' : 'gt001'}
+    file_sub_text(filename, patterns)
+    num_changes += 1
+    #tests_pretag_izumi_nag
+    filename = os.path.join(systest, 'tests_pretag_izumi_nag')
+    #check that file actually exists (it doesn't always for older CAM versions):
+    if os.path.exists(filename):  
+        patterns = {'fm001' : 'gt001'}
+        file_sub_text(filename, patterns)
+        num_changes += 1
     #Makefile.in
     filename = os.path.join(bld, 'Makefile.in') 
     patterns = {'\$\(ROOTDIR\)/components/cam/bld/mkDepends Filepath Srcfiles > \$@' :
@@ -1450,8 +1469,13 @@ def processRevision(export_dir, git_dir, log, external, cam_move):
     # Add boilerplate files
     #--------------------------------------
     for file in cam_copy_files:
-        src_path = os.path.join(currDir, "cam{}".format(file))
-        dst_path = os.path.join(git_dir, file)
+        if file == "TGIT.sh":
+            src_path = os.path.join(currDir,file)
+            dst_path = os.path.join(git_dir, "test", "system", file)
+        else:
+            src_path = os.path.join(currDir, "cam{}".format(file))
+            dst_path = os.path.join(git_dir, file)
+
         needs_add = not os.path.exists(dst_path)
         if file_diff(src_path, dst_path):
             shutil.copy2(src_path, dst_path)
